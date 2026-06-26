@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed the subprocess RPC client to stop imposing an implicit 60s wait timeout on `waitForIdle()`, `collectEvents()`, and `promptAndWait()`; callers can now opt into a client-level `waitTimeoutMs` or disable the client-side wait timer entirely for long-running sessions.
 - Fixed `--session` and `SessionManager.open()` to reject non-empty invalid session files without overwriting them ([#6002](https://github.com/earendil-works/pi/issues/6002)).
 - Fixed assistant messages stopped by output length to show a visible incomplete-response error ([#4290](https://github.com/earendil-works/pi/issues/4290)).
 - Fixed `--no-session --session-id` so ephemeral CLI runs can use deterministic session IDs for provider cache affinity ([#6070](https://github.com/earendil-works/pi/issues/6070)).
