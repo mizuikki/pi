@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { createModels, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -43,12 +44,14 @@ describe("AgentSessionRuntime characterization", () => {
 			options?.cwd ?? join(tmpdir(), `pi-runtime-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const faux = registerFauxProvider({
+		const faux = fauxProvider({
 			models: [
 				{ id: "faux-1", reasoning: true },
 				{ id: "faux-2", reasoning: false },
 			],
 		});
+		const models = createModels();
+		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
@@ -89,6 +92,7 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
+				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -96,6 +100,7 @@ describe("AgentSessionRuntime characterization", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: runtimeOptions.model,
+					models,
 					thinkingLevel: runtimeOptions.thinkingLevel,
 				})),
 				services,
@@ -111,7 +116,6 @@ describe("AgentSessionRuntime characterization", () => {
 
 		cleanups.push(async () => {
 			await runtime.dispose();
-			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}
@@ -334,12 +338,14 @@ describe("AgentSessionRuntime characterization", () => {
 		const tempDir = join(tmpdir(), `pi-runtime-suite-in-memory-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const faux = registerFauxProvider({
+		const faux = fauxProvider({
 			models: [
 				{ id: "faux-1", reasoning: true },
 				{ id: "faux-2", reasoning: false },
 			],
 		});
+		const models = createModels();
+		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
@@ -378,6 +384,7 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
+				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -385,6 +392,7 @@ describe("AgentSessionRuntime characterization", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: runtimeOptions.model,
+					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -398,7 +406,6 @@ describe("AgentSessionRuntime characterization", () => {
 		await runtime.session.bindExtensions({});
 		cleanups.push(async () => {
 			await runtime.dispose();
-			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}
@@ -453,6 +460,8 @@ describe("AgentSessionRuntime characterization", () => {
 		mkdirSync(firstDir, { recursive: true });
 		mkdirSync(secondDir, { recursive: true });
 		const { runtime, faux, tempDir } = await createRuntimeForTest(() => {}, { cwd: firstDir });
+		const models = createModels();
+		models.setProvider(faux.provider);
 		const otherAuthStorage = AuthStorage.inMemory();
 		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
 		const otherRuntimeOptions = {
@@ -491,12 +500,14 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...otherRuntimeOptions,
 				cwd,
+				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
 					services,
 					sessionManager,
 					sessionStartEvent,
+					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -524,6 +535,8 @@ describe("AgentSessionRuntime characterization", () => {
 			bootstrapModel: false,
 			bootstrapThinkingLevel: false,
 		});
+		const models = createModels();
+		models.setProvider(faux.provider);
 		const otherDir = join(tempDir, "other");
 		mkdirSync(otherDir, { recursive: true });
 		const otherAuthStorage = AuthStorage.inMemory();
@@ -564,12 +577,14 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...otherRuntimeOptions,
 				cwd,
+				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
 					services,
 					sessionManager,
 					sessionStartEvent,
+					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,

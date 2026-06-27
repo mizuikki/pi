@@ -1626,7 +1626,7 @@ describe("ModelRegistry", () => {
 				});
 			});
 
-			test("missing explicit env apiKey keeps provider unavailable", () => {
+			test("missing explicit env apiKey keeps provider unavailable", async () => {
 				const envVarName = "TEST_API_KEY_MISSING_TEST_98765";
 				const originalEnv = process.env[envVarName];
 				delete process.env[envVarName];
@@ -1639,7 +1639,9 @@ describe("ModelRegistry", () => {
 					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
 
 					expect(registry.getProviderAuthStatus("custom-provider")).toEqual({ configured: false });
-					expect(registry.getAvailable().some((model) => model.provider === "custom-provider")).toBe(false);
+					expect((await registry.getAvailable()).some((model) => model.provider === "custom-provider")).toBe(
+						false,
+					);
 				} finally {
 					if (originalEnv === undefined) {
 						delete process.env[envVarName];
@@ -1707,14 +1709,14 @@ describe("ModelRegistry", () => {
 				});
 
 				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
-				const available = registry.getAvailable();
+				const available = await registry.getAvailable();
 
 				expect(available.some((m) => m.provider === "custom-provider")).toBe(true);
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(0);
 			});
 
-			test("getAvailable filters GitHub Copilot OAuth models to account picker availability", () => {
+			test("getAvailable filters GitHub Copilot OAuth models to account picker availability", async () => {
 				authStorage.set("github-copilot", {
 					type: "oauth",
 					refresh: "github-access-token",
@@ -1726,10 +1728,7 @@ describe("ModelRegistry", () => {
 				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
 
 				expect(
-					registry
-						.getAvailable()
-						.filter((m) => m.provider === "github-copilot")
-						.map((m) => m.id),
+					(await registry.getAvailable()).filter((m) => m.provider === "github-copilot").map((m) => m.id),
 				).toEqual(["gpt-4.1"]);
 			});
 

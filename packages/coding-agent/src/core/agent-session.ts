@@ -23,6 +23,7 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
+import type { Models } from "@earendil-works/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
@@ -169,6 +170,8 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
+	/** Explicit Models collection forwarded by SDK/runtime factories. */
+	models?: Models;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -362,6 +365,10 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	private async _hasConfiguredAuth(model: Model<any>): Promise<boolean> {
+		return this._modelRegistry.hasConfiguredAuth(model);
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -1063,7 +1070,7 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			if (!this._modelRegistry.hasConfiguredAuth(this.model)) {
+			if (!(await this._hasConfiguredAuth(this.model))) {
 				const isOAuth = this._modelRegistry.isUsingOAuth(this.model);
 				if (isOAuth) {
 					throw new Error(
@@ -1452,7 +1459,7 @@ export class AgentSession {
 	 * @throws Error if no auth is configured for the model
 	 */
 	async setModel(model: Model<any>): Promise<void> {
-		if (!this._modelRegistry.hasConfiguredAuth(model)) {
+		if (!(await this._hasConfiguredAuth(model))) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
@@ -1482,7 +1489,13 @@ export class AgentSession {
 	}
 
 	private async _cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const scopedModels = this._scopedModels.filter((scoped) => this._modelRegistry.hasConfiguredAuth(scoped.model));
+		const scopedModelsWithAuth = await Promise.all(
+			this._scopedModels.map(async (scoped) => ({
+				scoped,
+				hasAuth: await this._hasConfiguredAuth(scoped.model),
+			})),
+		);
+		const scopedModels = scopedModelsWithAuth.filter((entry) => entry.hasAuth).map((entry) => entry.scoped);
 		if (scopedModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -2256,7 +2269,7 @@ export class AgentSession {
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model) => {
-					if (!this.modelRegistry.hasConfiguredAuth(model)) return false;
+					if (!(await this._hasConfiguredAuth(model))) return false;
 					await this.setModel(model);
 					return true;
 				},

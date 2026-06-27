@@ -2,6 +2,7 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
+import type { Models as ExplicitModels } from "@earendil-works/pi-ai";
 import {
 	type AnthropicMessagesCompat,
 	type Api,
@@ -355,21 +356,31 @@ export class ModelRegistry {
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
+	private explicitModels: ExplicitModels | undefined;
 	readonly authStorage: AuthStorage;
 	private modelsJsonPath: string | undefined;
 
-	private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined) {
+	private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined, explicitModels?: ExplicitModels) {
 		this.authStorage = authStorage;
 		this.modelsJsonPath = modelsJsonPath ? normalizePath(modelsJsonPath) : undefined;
+		this.explicitModels = explicitModels;
 		this.loadModels();
 	}
 
-	static create(authStorage: AuthStorage, modelsJsonPath: string = join(getAgentDir(), "models.json")): ModelRegistry {
-		return new ModelRegistry(authStorage, modelsJsonPath);
+	static create(
+		authStorage: AuthStorage,
+		modelsJsonPath: string = join(getAgentDir(), "models.json"),
+		explicitModels?: ExplicitModels,
+	): ModelRegistry {
+		return new ModelRegistry(authStorage, modelsJsonPath, explicitModels);
 	}
 
-	static inMemory(authStorage: AuthStorage): ModelRegistry {
-		return new ModelRegistry(authStorage, undefined);
+	static inMemory(authStorage: AuthStorage, explicitModels?: ExplicitModels): ModelRegistry {
+		return new ModelRegistry(authStorage, undefined, explicitModels);
+	}
+
+	setExplicitModels(explicitModels: ExplicitModels | undefined): void {
+		this.explicitModels = explicitModels;
 	}
 
 	/**
@@ -634,28 +645,65 @@ export class ModelRegistry {
 	 * If models.json had errors, returns only built-in models.
 	 */
 	getAll(): Model<Api>[] {
-		return this.models;
+		return this.mergeExplicitModels(this.models);
 	}
 
 	/**
 	 * Get only models that have auth configured.
-	 * This is a fast check that doesn't refresh OAuth tokens.
+	 * Explicit `Models` auth is resolved through `models.getAuth()` so unconfigured
+	 * explicit providers are not treated as available.
 	 */
-	getAvailable(): Model<Api>[] {
-		return this.models.filter((m) => this.hasConfiguredAuth(m));
+	async getAvailable(): Promise<Model<Api>[]> {
+		const allModels = this.mergeExplicitModels(this.models);
+		const availability = await Promise.all(
+			allModels.map(async (model) => ({
+				model,
+				hasAuth: await this.hasConfiguredAuth(model),
+			})),
+		);
+		return availability.filter((entry) => entry.hasAuth).map((entry) => entry.model);
+	}
+
+	/**
+	 * Synchronous best-effort availability snapshot.
+	 * Explicit `Models` providers are included by provider presence only because async
+	 * auth resolution is not available to sync callers.
+	 */
+	getAvailableSync(): Model<Api>[] {
+		return this.mergeExplicitModels(this.models.filter((m) => this.hasConfiguredAuthSync(m)));
 	}
 
 	/**
 	 * Find a model by provider and ID.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
-		return this.models.find((m) => m.provider === provider && m.id === modelId);
+		return this.getAll().find((m) => m.provider === provider && m.id === modelId);
 	}
 
 	/**
-	 * Get API key for a model.
+	 * Check whether a model currently has resolvable auth.
 	 */
-	hasConfiguredAuth(model: Model<Api>): boolean {
+	async hasConfiguredAuth(model: Model<Api>): Promise<boolean> {
+		const explicitModel = this.findExplicitModel(model.provider, model.id);
+		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
+			try {
+				return (await this.explicitModels.getAuth(explicitModel)) !== undefined;
+			} catch {
+				return false;
+			}
+		}
+
+		return this.hasConfiguredAuthSync(model);
+	}
+
+	/**
+	 * Synchronous availability check for non-explicit auth sources.
+	 */
+	hasConfiguredAuthSync(model: Model<Api>): boolean {
+		if (this.findExplicitModel(model.provider, model.id)) {
+			return this.explicitModels?.getProvider(model.provider) !== undefined;
+		}
+
 		const providerApiKey = this.providerRequestConfigs.get(model.provider)?.apiKey;
 		return (
 			this.authStorage.hasAuth(model.provider) ||
@@ -699,6 +747,40 @@ export class ModelRegistry {
 	 * Get API key and request headers for a model.
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
+		const explicitModel = this.findExplicitModel(model.provider, model.id);
+		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
+			try {
+				const authResult = await this.explicitModels.getAuth(explicitModel);
+				if (!authResult) {
+					return { ok: false, error: `No API key found for "${model.provider}"` };
+				}
+
+				const authHeaders =
+					authResult.auth.headers &&
+					Object.entries(authResult.auth.headers).every((entry): entry is [string, string] => entry[1] !== null)
+						? Object.fromEntries(
+								Object.entries(authResult.auth.headers).filter(
+									(entry): entry is [string, string] => entry[1] !== null,
+								),
+							)
+						: undefined;
+				const headers =
+					explicitModel.headers || authHeaders ? { ...explicitModel.headers, ...authHeaders } : undefined;
+
+				return {
+					ok: true,
+					apiKey: authResult.auth.apiKey,
+					headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
+					env: authResult.env && Object.keys(authResult.env).length > 0 ? authResult.env : undefined,
+				};
+			} catch (error) {
+				return {
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		}
+
 		try {
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
 			const providerEnv = this.authStorage.getProviderEnv(model.provider);
@@ -814,8 +896,99 @@ export class ModelRegistry {
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
 	isUsingOAuth(model: Model<Api>): boolean {
+		const explicitProvider = this.explicitModels?.getProvider(model.provider);
+		if (explicitProvider?.auth.oauth) {
+			return true;
+		}
+
 		const cred = this.authStorage.get(model.provider);
 		return cred?.type === "oauth";
+	}
+
+	private getExplicitModels(): Model<Api>[] {
+		if (!this.explicitModels) {
+			return [];
+		}
+
+		const baseModels = this.explicitModels.getModels() as Model<Api>[];
+		if (this.registeredProviders.size === 0) {
+			return [...baseModels];
+		}
+
+		const providerNames = new Set<string>([
+			...baseModels.map((model) => model.provider),
+			...this.registeredProviders.keys(),
+		]);
+		const explicitModels: Model<Api>[] = [];
+
+		for (const providerName of providerNames) {
+			const providerModels = baseModels.filter((model) => model.provider === providerName);
+			const providerConfig = this.registeredProviders.get(providerName);
+			if (!providerConfig) {
+				explicitModels.push(...providerModels);
+				continue;
+			}
+
+			if (providerConfig.models && providerConfig.models.length > 0) {
+				for (const modelDef of providerConfig.models) {
+					const baseModel = providerModels.find((model) => model.id === modelDef.id) ?? providerModels[0];
+					const api = modelDef.api ?? providerConfig.api ?? baseModel?.api;
+					const baseUrl = modelDef.baseUrl ?? providerConfig.baseUrl ?? baseModel?.baseUrl;
+					if (!api || !baseUrl) {
+						continue;
+					}
+
+					explicitModels.push({
+						id: modelDef.id,
+						name: modelDef.name ?? baseModel?.name ?? modelDef.id,
+						api: api as Api,
+						provider: providerName,
+						baseUrl,
+						reasoning: modelDef.reasoning ?? baseModel?.reasoning ?? false,
+						thinkingLevelMap: modelDef.thinkingLevelMap ?? baseModel?.thinkingLevelMap,
+						input: (modelDef.input ?? baseModel?.input ?? ["text"]) as ("text" | "image")[],
+						cost: modelDef.cost ?? baseModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: modelDef.contextWindow ?? baseModel?.contextWindow ?? 128000,
+						maxTokens: modelDef.maxTokens ?? baseModel?.maxTokens ?? 16384,
+						headers: undefined,
+						compat: modelDef.compat ?? baseModel?.compat,
+					} as Model<Api>);
+				}
+				continue;
+			}
+
+			explicitModels.push(
+				...providerModels.map((model) => ({
+					...model,
+					baseUrl: providerConfig.baseUrl ?? model.baseUrl,
+				})),
+			);
+		}
+
+		return explicitModels;
+	}
+
+	private findExplicitModel(provider: string, modelId: string): Model<Api> | undefined {
+		return this.getExplicitModels().find((model) => model.provider === provider && model.id === modelId);
+	}
+
+	private mergeExplicitModels(fallbackModels: Model<Api>[]): Model<Api>[] {
+		const explicitModels = this.getExplicitModels();
+		if (explicitModels.length === 0) {
+			return fallbackModels;
+		}
+
+		const seen = new Set<string>();
+		const merged: Model<Api>[] = [];
+		for (const model of [...explicitModels, ...fallbackModels]) {
+			const key = `${model.provider}:${model.id}`;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			merged.push(model);
+		}
+		return merged;
 	}
 
 	/**

@@ -7,13 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
-import type {
-	FauxModelDefinition,
-	FauxProviderRegistration,
-	FauxResponseStep,
-	Model,
-} from "@earendil-works/pi-ai/compat";
-import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import type { FauxModelDefinition, FauxResponseStep, Model, Models } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai";
+import type { FauxProviderHandle } from "@earendil-works/pi-ai/providers/faux";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
@@ -78,7 +75,8 @@ export interface Harness {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	authStorage: AuthStorage;
-	faux: FauxProviderRegistration;
+	faux: FauxProviderHandle;
+	explicitModels: Models;
 	models: [Model<string>, ...Model<string>[]];
 	getModel(): Model<string>;
 	getModel(modelId: string): Model<string> | undefined;
@@ -99,11 +97,13 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
-	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
+	const faux = fauxProvider({
 		models: options.models,
 	});
-	fauxProvider.setResponses([]);
-	const model = fauxProvider.getModel();
+	faux.setResponses([]);
+	const explicitModels = createModels();
+	explicitModels.setProvider(faux.provider);
+	const model = faux.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
@@ -115,13 +115,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	if (withConfiguredAuth) {
 		authStorage.setRuntimeApiKey(model.provider, "faux-key");
 	}
-	const modelRegistry = ModelRegistry.inMemory(authStorage);
+	const modelRegistry = ModelRegistry.inMemory(authStorage, explicitModels);
 	if (withConfiguredAuth) {
 		modelRegistry.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,
-			apiKey: "faux-key",
-			api: fauxProvider.api,
-			models: fauxProvider.models.map((registeredModel) => ({
+			api: faux.api,
+			models: faux.models.map((registeredModel) => ({
 				id: registeredModel.id,
 				name: registeredModel.name,
 				api: registeredModel.api,
@@ -142,6 +141,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			systemPrompt: options.systemPrompt ?? "You are a test assistant.",
 			tools: [],
 		},
+		streamFn: (requestModel, context, streamOptions) =>
+			explicitModels.streamSimple(requestModel, context, streamOptions),
 		convertToLlm,
 		onPayload: async (payload) => {
 			const runner = extensionRunnerRef.current;
@@ -179,6 +180,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		settingsManager,
 		cwd: tempDir,
 		modelRegistry,
+		models: explicitModels,
 		resourceLoader,
 		baseToolsOverride: toolMap,
 		initialActiveToolNames: options.initialActiveToolNames,
@@ -197,12 +199,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		sessionManager,
 		settingsManager,
 		authStorage,
-		faux: fauxProvider,
-		models: fauxProvider.models,
-		getModel: fauxProvider.getModel,
-		setResponses: fauxProvider.setResponses,
-		appendResponses: fauxProvider.appendResponses,
-		getPendingResponseCount: fauxProvider.getPendingResponseCount,
+		faux,
+		explicitModels,
+		models: faux.models,
+		getModel: faux.getModel,
+		setResponses: faux.setResponses,
+		appendResponses: faux.appendResponses,
+		getPendingResponseCount: faux.getPendingResponseCount,
 		events,
 		eventsOfType<T extends AgentSessionEvent["type"]>(type: T) {
 			return events.filter((event): event is Extract<AgentSessionEvent, { type: T }> => event.type === type);
@@ -210,7 +213,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		tempDir,
 		cleanup() {
 			session.dispose();
-			fauxProvider.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true });
 			}

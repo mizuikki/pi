@@ -344,7 +344,7 @@ describe("resolveCliModel", () => {
 		};
 		const registry = {
 			getAll: () => [...allModels, zaiModel, gatewayModel],
-			hasConfiguredAuth: () => true,
+			hasConfiguredAuthSync: () => true,
 		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
 
 		const result = resolveCliModel({
@@ -384,7 +384,7 @@ describe("resolveCliModel", () => {
 		};
 		const registry = {
 			getAll: () => [...allModels, commandcodeModel, xiaomiModel],
-			hasConfiguredAuth: (model: Model<"anthropic-messages">) => model.provider === "commandcode",
+			hasConfiguredAuthSync: (model: Model<"anthropic-messages">) => model.provider === "commandcode",
 		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
 
 		const result = resolveCliModel({

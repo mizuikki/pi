@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { createModels } from "@earendil-works/pi-ai";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -28,9 +29,11 @@ describe("issue #2753 reload stale resource settings", () => {
 		mkdirSync(promptsDir, { recursive: true });
 		writeFileSync(join(promptsDir, "test.md"), "Echo test prompt\n");
 
-		const faux = registerFauxProvider({
+		const faux = fauxProvider({
 			models: [{ id: "faux-1", reasoning: false }],
 		});
+		const models = createModels();
+		models.setProvider(faux.provider);
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
 
@@ -39,6 +42,7 @@ describe("issue #2753 reload stale resource settings", () => {
 				cwd,
 				agentDir,
 				authStorage,
+				models,
 				resourceLoaderOptions: {
 					extensionFactories: [
 						(pi) => {
@@ -69,6 +73,7 @@ describe("issue #2753 reload stale resource settings", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: faux.getModel(),
+					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -82,7 +87,6 @@ describe("issue #2753 reload stale resource settings", () => {
 
 		cleanups.push(() => {
 			runtime.session.dispose();
-			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}

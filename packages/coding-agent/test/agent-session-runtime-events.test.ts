@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { createModels, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -38,7 +39,9 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		const tempDir = join(tmpdir(), `pi-runtime-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const faux = registerFauxProvider();
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
@@ -59,6 +62,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
+				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -66,6 +70,7 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: faux.getModel(),
+					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -80,7 +85,6 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 
 		cleanups.push(async () => {
 			await runtimeHost.dispose();
-			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}

@@ -431,8 +431,8 @@ export function resolveCliModel(options: {
 			const rawExactMatches = availableModels.filter(
 				(m) => m.id.toLowerCase() === cliModel.toLowerCase() && !modelsAreEqual(m, model),
 			);
-			if (rawExactMatches.length > 0 && !modelRegistry.hasConfiguredAuth(model)) {
-				const authenticatedRawMatches = rawExactMatches.filter((m) => modelRegistry.hasConfiguredAuth(m));
+			if (rawExactMatches.length > 0 && !modelRegistry.hasConfiguredAuthSync(model)) {
+				const authenticatedRawMatches = rawExactMatches.filter((m) => modelRegistry.hasConfiguredAuthSync(m));
 				if (authenticatedRawMatches.length === 1) {
 					return {
 						model: authenticatedRawMatches[0],
@@ -576,7 +576,7 @@ export async function findInitialModel(options: {
 	// 3. Try saved default from settings
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
-		if (found) {
+		if (found && (await modelRegistry.hasConfiguredAuth(found))) {
 			model = found;
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
@@ -619,7 +619,7 @@ export async function restoreModelFromSession(
 	const restoredModel = modelRegistry.find(savedProvider, savedModelId);
 
 	// Check if restored model exists and still has auth configured
-	const hasConfiguredAuth = restoredModel ? modelRegistry.hasConfiguredAuth(restoredModel) : false;
+	const hasConfiguredAuth = restoredModel ? await modelRegistry.hasConfiguredAuth(restoredModel) : false;
 
 	if (restoredModel && hasConfiguredAuth) {
 		if (shouldPrintMessages) {
