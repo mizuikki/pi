@@ -378,7 +378,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		type FakeInteractiveMode = {
 			session: {
 				scopedModels: Array<{ model: TestModel }>;
-				modelRegistry: { getAvailable: () => TestModel[] };
+				modelRegistry: { getAvailable: () => TestModel[]; getAvailableSync: () => TestModel[] };
 				promptTemplates: [];
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
@@ -401,7 +401,10 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 		const fakeThis: FakeInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRegistry: { getAvailable: () => models },
+				modelRegistry: {
+					getAvailable: () => models,
+					getAvailableSync: () => models,
+				},
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },

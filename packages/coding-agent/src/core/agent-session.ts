@@ -15,7 +15,15 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mizuikki/pi-agent-core";
+import type {
+	Agent,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	StreamFn,
+	ThinkingLevel,
+} from "@mizuikki/pi-agent-core";
 import type { Models } from "@mizuikki/pi-ai";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mizuikki/pi-ai/compat";
 import {
@@ -84,6 +92,7 @@ import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader }
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { isSdkDefaultStreamFn } from "./stream-fn-tags.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
@@ -391,12 +400,16 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
+	private _usesSdkManagedStreamFn(streamFn: StreamFn): boolean {
+		return streamFn === streamSimple || isSdkDefaultStreamFn(streamFn);
+	}
+
 	private async _getCompactionRequestAuth(model: Model<any>): Promise<{
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 	}> {
-		if (this.agent.streamFn === streamSimple) {
+		if (this._usesSdkManagedStreamFn(this.agent.streamFn)) {
 			return this._getRequiredRequestAuth(model);
 		}
 
@@ -1926,7 +1939,7 @@ export class AgentSession {
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
 			let env: Record<string, string> | undefined;
-			if (this.agent.streamFn === streamSimple) {
+			if (this._usesSdkManagedStreamFn(this.agent.streamFn)) {
 				const authResult = await this._modelRegistry.getApiKeyAndHeaders(this.model);
 				if (!authResult.ok || !authResult.apiKey) {
 					return false;

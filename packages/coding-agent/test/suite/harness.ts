@@ -8,9 +8,9 @@ import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@mizuikki/pi-agent-core";
 import { Agent } from "@mizuikki/pi-agent-core";
 import type { FauxModelDefinition, FauxResponseStep, Model, Models } from "@mizuikki/pi-ai";
-import { createModels } from "@mizuikki/pi-ai";
+import { createModels, createProvider } from "@mizuikki/pi-ai";
 import type { FauxProviderHandle } from "@mizuikki/pi-ai/providers/faux";
-import { fauxProvider } from "@mizuikki/pi-ai/providers/faux";
+import { createFauxCore, fauxProvider } from "@mizuikki/pi-ai/providers/faux";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
@@ -97,15 +97,36 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
-	const faux = fauxProvider({
-		models: options.models,
-	});
+	const withConfiguredAuth = options.withConfiguredAuth ?? true;
+	const faux = withConfiguredAuth
+		? fauxProvider({
+				models: options.models,
+			})
+		: (() => {
+				const core = createFauxCore({ models: options.models });
+				const provider = createProvider({
+					id: core.provider,
+					name: core.provider,
+					auth: { apiKey: { name: "Faux", resolve: async () => undefined } },
+					models: core.models,
+					api: { stream: core.stream, streamSimple: core.streamSimple },
+				});
+				return {
+					provider,
+					api: core.api,
+					models: core.models,
+					getModel: core.getModel,
+					state: core.state,
+					setResponses: core.setResponses,
+					appendResponses: core.appendResponses,
+					getPendingResponseCount: core.getPendingResponseCount,
+				} satisfies FauxProviderHandle;
+			})();
 	faux.setResponses([]);
 	const explicitModels = createModels();
 	explicitModels.setProvider(faux.provider);
 	const model = faux.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
-	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionManager = SessionManager.inMemory();
@@ -119,6 +140,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	if (withConfiguredAuth) {
 		modelRegistry.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,
+			apiKey: "faux-key",
 			api: faux.api,
 			models: faux.models.map((registeredModel) => ({
 				id: registeredModel.id,

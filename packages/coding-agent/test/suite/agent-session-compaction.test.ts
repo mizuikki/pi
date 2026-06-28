@@ -4,6 +4,7 @@ import {
 	fauxAssistantMessage,
 	type Model,
 } from "@mizuikki/pi-ai";
+import { streamSimple } from "@mizuikki/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
 import { createHarness, type Harness } from "./harness.ts";
@@ -138,6 +139,8 @@ describe("AgentSession compaction characterization", () => {
 	it("throws when compacting without configured auth", async () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
 		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.session.agent.streamFn = streamSimple;
 
 		await expect(harness.session.compact()).rejects.toThrow(`No API key found for ${harness.getModel().provider}.`);
 	});
