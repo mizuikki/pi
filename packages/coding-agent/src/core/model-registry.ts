@@ -2,7 +2,7 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
-import type { Models as ExplicitModels } from "@earendil-works/pi-ai";
+import type { Models as ExplicitModels } from "@mizuikki/pi-ai";
 import {
 	type AnthropicMessagesCompat,
 	type Api,
@@ -18,8 +18,8 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
-} from "@earendil-works/pi-ai/compat";
-import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
+} from "@mizuikki/pi-ai/compat";
+import { registerOAuthProvider, resetOAuthProviders } from "@mizuikki/pi-ai/oauth";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { type Static, Type } from "typebox";

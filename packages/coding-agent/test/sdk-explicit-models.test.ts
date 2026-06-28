@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
-import { createModels, createProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import { createAgentSession, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage, Model } from "@mizuikki/pi-ai";
+import { createModels, createProvider, fauxAssistantMessage } from "@mizuikki/pi-ai";
+import { fauxProvider } from "@mizuikki/pi-ai/providers/faux";
+import { createAgentSession, SessionManager, SettingsManager } from "@mizuikki/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("createAgentSession explicit models", () => {

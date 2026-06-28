@@ -5,17 +5,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const packages = [
-	{ directory: "packages/ai", name: "@earendil-works/pi-ai" },
-	{ directory: "packages/agent", name: "@earendil-works/pi-agent-core" },
-	{ directory: "packages/tui", name: "@earendil-works/pi-tui" },
-	{ directory: "packages/coding-agent", name: "@earendil-works/pi-coding-agent" },
+	{ directory: "packages/ai", name: "@mizuikki/pi-ai" },
+	{ directory: "packages/agent", name: "@mizuikki/pi-agent-core" },
+	{ directory: "packages/tui", name: "@mizuikki/pi-tui" },
+	{ directory: "packages/coding-agent", name: "@mizuikki/pi-coding-agent" },
 ];
 
 const dryRun = process.argv.includes("--dry-run");
-const unknownArgs = process.argv.slice(2).filter((arg) => arg !== "--dry-run");
+const registryArgIndex = process.argv.indexOf("--registry");
+const registry = registryArgIndex === -1 ? "https://registry.npmjs.org" : process.argv[registryArgIndex + 1];
+const unknownArgs = process.argv.slice(2).filter((arg, index, all) => {
+	if (arg === "--dry-run" || arg === "--registry") return false;
+	if (registryArgIndex !== -1 && index + 2 === registryArgIndex + 1) return false;
+	return index + 2 !== registryArgIndex + 1;
+});
 
-if (unknownArgs.length > 0) {
-	console.error(`Usage: node scripts/publish.mjs [--dry-run]`);
+if (unknownArgs.length > 0 || (registryArgIndex !== -1 && !registry)) {
+	console.error(`Usage: node scripts/publish.mjs [--dry-run] [--registry <url>]`);
 	process.exit(1);
 }
 
@@ -56,7 +62,7 @@ function validatePack(directory) {
 }
 
 function isPublished(name, version) {
-	const result = spawnSync(commandForPlatform("npm"), ["view", `${name}@${version}`, "version", "--json"], {
+	const result = spawnSync(commandForPlatform("npm"), ["view", `${name}@${version}`, "version", "--json", "--registry", registry], {
 		encoding: "utf8",
 		stdio: ["inherit", "pipe", "pipe"],
 	});
@@ -87,7 +93,7 @@ if (versions.length !== 1) {
 	throw new Error(`Publish packages are not lockstep versioned: ${versions.join(", ")}`);
 }
 
-console.log(`Publishing pi packages at ${versions[0]}${dryRun ? " (dry run)" : ""}\n`);
+console.log(`Publishing pi packages to ${registry} at ${versions[0]}${dryRun ? " (dry run)" : ""}\n`);
 
 const packageStates = packages.map((pkg) => ({
 	...pkg,
@@ -120,6 +126,10 @@ for (const pkg of packageStates) {
 		continue;
 	}
 
-	run("npm", ["publish", "--access", "public", "--provenance", "--ignore-scripts"], { cwd: pkg.directory });
+	const publishArgs = ["publish", "--ignore-scripts", "--registry", registry];
+	if (registry === "https://registry.npmjs.org") {
+		publishArgs.splice(1, 0, "--access", "public", "--provenance");
+	}
+	run("npm", publishArgs, { cwd: pkg.directory });
 	console.log();
 }

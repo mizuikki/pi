@@ -2915,7 +2915,7 @@ export const VERCEL_AI_GATEWAY_MODELS = {
 	} satisfies Model<"anthropic-messages">,
 	"zai/glm-4.5": {
 		id: "zai/glm-4.5",
-		name: "GLM-4.5",
+		name: "GLM 4.5",
 		api: "anthropic-messages",
 		provider: "vercel-ai-gateway",
 		baseUrl: "https://ai-gateway.vercel.sh",

@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-orchestrator",
+	"name": "@mizuikki/pi-orchestrator",
 	"version": "0.80.2",
 	"description": "experimental orchestrator package for pi",
 	"type": "module",
@@ -30,14 +30,14 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/mizuikki/pi.git",
 		"directory": "packages/orchestrator"
 	},
 	"engines": {
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "0.80.2"
+		"@mizuikki/pi-coding-agent": "0.80.2"
 	},
 	"devDependencies": {
 		"shx": "0.4.0"
