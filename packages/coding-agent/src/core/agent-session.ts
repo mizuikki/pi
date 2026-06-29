@@ -323,6 +323,7 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
+	private _pendingExtensionActions = new Set<Promise<void>>();
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
@@ -492,6 +493,19 @@ export class AgentSession {
 			steering: [...this._steeringMessages],
 			followUp: [...this._followUpMessages],
 		});
+	}
+
+	private _trackPendingExtensionAction(action: Promise<void>): void {
+		this._pendingExtensionActions.add(action);
+		action.finally(() => {
+			this._pendingExtensionActions.delete(action);
+		});
+	}
+
+	private async _waitForPendingExtensionActions(): Promise<void> {
+		while (this._pendingExtensionActions.size > 0) {
+			await Promise.allSettled([...this._pendingExtensionActions]);
+		}
 	}
 
 	// Track last assistant message for auto-compaction check
@@ -2131,6 +2145,7 @@ export class AgentSession {
 
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
+		await this._waitForPendingExtensionActions();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
 
@@ -2240,22 +2255,24 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					this.sendCustomMessage(message, options).catch((err) => {
+					const action = this.sendCustomMessage(message, options).catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_message",
 							error: err instanceof Error ? err.message : String(err),
 						});
 					});
+					this._trackPendingExtensionAction(action);
 				},
 				sendUserMessage: (content, options) => {
-					this.sendUserMessage(content, options).catch((err) => {
+					const action = this.sendUserMessage(content, options).catch((err) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_user_message",
 							error: err instanceof Error ? err.message : String(err),
 						});
 					});
+					this._trackPendingExtensionAction(action);
 				},
 				appendEntry: (customType, data) => {
 					this.sessionManager.appendCustomEntry(customType, data);
@@ -2494,6 +2511,7 @@ export class AgentSession {
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			await this._waitForPendingExtensionActions();
 			await this.extendResourcesFromExtensions("reload");
 		}
 	}
