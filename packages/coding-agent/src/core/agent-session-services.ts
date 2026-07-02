@@ -166,7 +166,7 @@ export async function createAgentSessionServices(
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
 		try {
-			modelRegistry.registerProvider(name, config);
+			modelRegistry.registerProvider(name, config, extensionPath);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			diagnostics.push({

@@ -33,7 +33,6 @@ import {
 	isContextOverflow,
 	isRetryableAssistantError,
 	modelsAreEqual,
-	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
@@ -2150,9 +2149,14 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
+		this._resetExtensionActionTracking();
 		await this._extensionRunner.emit(this._sessionStartEvent);
 		await this._waitForExtensionActions("startup");
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+	}
+
+	private _resetExtensionActionTracking(): void {
+		this._extensionActionPromises = new Set();
 	}
 
 	private _trackExtensionAction(
@@ -2178,6 +2182,7 @@ export class AgentSession {
 		while (this._extensionActionPromises.size > 0) {
 			const remainingMs = EXTENSION_ACTION_WAIT_TIMEOUT_MS - (Date.now() - startedAt);
 			if (remainingMs <= 0 || (await this._didExtensionActionWaitTimeout(remainingMs))) {
+				this._resetExtensionActionTracking();
 				this._extensionRunner.emitError({
 					extensionPath: "<runtime>",
 					event: "session_start",
@@ -2261,18 +2266,25 @@ export class AgentSession {
 			: undefined;
 	}
 
-	private _refreshCurrentModelFromRegistry(): void {
+	private _refreshCurrentModelFromRegistry(clearMissing = false): void {
 		const currentModel = this.model;
 		if (!currentModel) {
 			return;
 		}
 
 		const refreshedModel = this._modelRegistry.find(currentModel.provider, currentModel.id);
-		if (!refreshedModel || refreshedModel === currentModel) {
+		if (!refreshedModel) {
+			if (clearMissing) {
+				delete (this.agent.state as { model?: Model<any> }).model;
+			}
+			return;
+		}
+		if (refreshedModel === currentModel) {
 			return;
 		}
 
 		this.agent.state.model = refreshedModel;
+		this.setThinkingLevel(this.thinkingLevel);
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {
@@ -2366,12 +2378,12 @@ export class AgentSession {
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
 			},
 			{
-				registerProvider: (name, config) => {
-					this._modelRegistry.registerProvider(name, config);
+				registerProvider: (name, config, owner) => {
+					this._modelRegistry.registerProvider(name, config, owner);
 					this._refreshCurrentModelFromRegistry();
 				},
-				unregisterProvider: (name) => {
-					this._modelRegistry.unregisterProvider(name);
+				unregisterProvider: (name, owner) => {
+					this._modelRegistry.unregisterProvider(name, owner);
 					this._refreshCurrentModelFromRegistry();
 				},
 			},
@@ -2526,17 +2538,19 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		const previousFlagValues = this._extensionRunner.getFlagValues();
-		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		const previousRunner = this._extensionRunner;
+		const previousFlagValues = previousRunner.getFlagValues();
+		await emitSessionShutdownEvent(previousRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
-		resetApiProviders();
 		await this._resourceLoader.reload();
+		this._modelRegistry.clearExtensionProviders();
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
 			includeAllExtensionTools: true,
 		});
+		this._refreshCurrentModelFromRegistry();
 
 		const hasBindings =
 			this._extensionUIContext ||
@@ -2545,10 +2559,13 @@ export class AgentSession {
 			this._extensionErrorListener;
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
+			this._resetExtensionActionTracking();
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
 			await this._waitForExtensionActions("reload");
 			await this.extendResourcesFromExtensions("reload");
 		}
+		this._refreshCurrentModelFromRegistry(true);
+		previousRunner.invalidate();
 	}
 
 	// =========================================================================

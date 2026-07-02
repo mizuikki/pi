@@ -499,24 +499,20 @@ export class InteractiveMode {
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
 		if (modelCommand) {
-			modelCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
-				// Get available models (scoped or from registry)
+			modelCommand.getArgumentCompletions = async (prefix: string): Promise<AutocompleteItem[] | null> => {
 				const models =
 					this.session.scopedModels.length > 0
 						? this.session.scopedModels.map((s) => s.model)
-						: this.session.modelRegistry.getAvailableSync();
+						: await Promise.resolve(this.session.modelRegistry.getAvailable()).catch(() => []);
 
 				if (models.length === 0) return null;
 
-				// Create items with provider/id format
 				const items = models.map((m) => ({
 					id: m.id,
 					provider: m.provider,
 					name: m.name,
 					label: `${m.provider}/${m.id}`,
 				}));
-
-				// Fuzzy filter by model ID + provider in either order.
 				const filtered = fuzzyFilter(items, prefix, getModelSearchText);
 
 				if (filtered.length === 0) return null;

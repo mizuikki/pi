@@ -247,6 +247,11 @@ interface ProviderRequestConfig {
 	authHeader?: boolean;
 }
 
+interface RegisteredProviderState {
+	config: ProviderConfigInput;
+	owner?: string;
+}
+
 export type ResolvedRequestAuth =
 	| {
 			ok: true;
@@ -354,7 +359,7 @@ export class ModelRegistry {
 	private models: Model<Api>[] = [];
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
-	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
+	private registeredProviders: Map<string, RegisteredProviderState> = new Map();
 	private loadError: string | undefined = undefined;
 	// #fork: explicit models
 	private explicitModels: ExplicitModels | undefined;
@@ -404,9 +409,18 @@ export class ModelRegistry {
 
 		this.loadModels();
 
-		for (const [providerName, config] of this.registeredProviders.entries()) {
-			this.applyProviderConfig(providerName, config);
+		for (const [providerName, state] of this.registeredProviders.entries()) {
+			this.applyProviderConfig(providerName, state.config);
 		}
+	}
+
+	clearExtensionProviders(): void {
+		for (const [providerName, state] of this.registeredProviders.entries()) {
+			if (state.owner !== undefined) {
+				this.registeredProviders.delete(providerName);
+			}
+		}
+		this.refresh();
 	}
 
 	/**
@@ -695,7 +709,7 @@ export class ModelRegistry {
 	 */
 	async hasConfiguredAuth(model: Model<Api>): Promise<boolean> {
 		// #fork: explicit models
-		const explicitModel = this.findExplicitModel(model.provider, model.id);
+		const explicitModel = this.getExplicitModel(model.provider, model.id);
 		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
 			try {
 				return (await this.explicitModels.getAuth(explicitModel)) !== undefined;
@@ -712,7 +726,7 @@ export class ModelRegistry {
 	 */
 	hasConfiguredAuthSync(model: Model<Api>): boolean {
 		// #fork: explicit models
-		if (this.findExplicitModel(model.provider, model.id)) {
+		if (this.getExplicitModel(model.provider, model.id)) {
 			return this.explicitModels?.getProvider(model.provider) !== undefined;
 		}
 
@@ -760,7 +774,7 @@ export class ModelRegistry {
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
 		// #fork: explicit models
-		const explicitModel = this.findExplicitModel(model.provider, model.id);
+		const explicitModel = this.getExplicitModel(model.provider, model.id);
 		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
 			try {
 				const authResult = await this.explicitModels.getAuth(explicitModel);
@@ -876,7 +890,7 @@ export class ModelRegistry {
 	 * Get display name for a provider.
 	 */
 	getProviderDisplayName(provider: string): string {
-		const registeredProvider = this.registeredProviders.get(provider);
+		const registeredProvider = this.registeredProviders.get(provider)?.config;
 		const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
 
 		return (
@@ -936,7 +950,7 @@ export class ModelRegistry {
 
 		for (const providerName of providerNames) {
 			const providerModels = baseModels.filter((model) => model.provider === providerName);
-			const providerConfig = this.registeredProviders.get(providerName);
+			const providerConfig = this.registeredProviders.get(providerName)?.config;
 			if (!providerConfig) {
 				explicitModels.push(...providerModels);
 				continue;
@@ -982,7 +996,7 @@ export class ModelRegistry {
 	}
 
 	// #fork: explicit models
-	private findExplicitModel(provider: string, modelId: string): Model<Api> | undefined {
+	getExplicitModel(provider: string, modelId: string): Model<Api> | undefined {
 		return this.getExplicitModels().find((model) => model.provider === provider && model.id === modelId);
 	}
 
@@ -1013,10 +1027,10 @@ export class ModelRegistry {
 	 * If provider has only baseUrl/headers: overrides existing models' URLs.
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
-	registerProvider(providerName: string, config: ProviderConfigInput): void {
+	registerProvider(providerName: string, config: ProviderConfigInput, owner?: string): void {
 		this.validateProviderConfig(providerName, config);
 		this.applyProviderConfig(providerName, config);
-		this.upsertRegisteredProvider(providerName, config);
+		this.upsertRegisteredProvider(providerName, config, owner);
 	}
 
 	/**
@@ -1028,8 +1042,10 @@ export class ModelRegistry {
 	 * remaining dynamic providers.
 	 * Has no effect if the provider was never registered.
 	 */
-	unregisterProvider(providerName: string): void {
-		if (!this.registeredProviders.has(providerName)) return;
+	unregisterProvider(providerName: string, owner?: string): void {
+		const state = this.registeredProviders.get(providerName);
+		if (!state) return;
+		if (owner !== undefined && state.owner !== owner) return;
 		this.registeredProviders.delete(providerName);
 		this.refresh();
 	}
@@ -1040,17 +1056,18 @@ export class ModelRegistry {
 	 * override existing ones; undefined values are preserved from the stored config.
 	 * If the provider is not registered, the incoming config is stored as-is.
 	 */
-	private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput): void {
+	private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput, owner?: string): void {
 		const existing = this.registeredProviders.get(providerName);
 		if (!existing) {
-			this.registeredProviders.set(providerName, config);
+			this.registeredProviders.set(providerName, { config, owner });
 			return;
 		}
 		for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
 			if (config[k] !== undefined) {
-				(existing as Record<string, unknown>)[k] = config[k];
+				(existing.config as Record<string, unknown>)[k] = config[k];
 			}
 		}
+		existing.owner = owner ?? existing.owner;
 	}
 
 	private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {

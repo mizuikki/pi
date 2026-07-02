@@ -308,8 +308,8 @@ export class ExtensionRunner {
 		actions: ExtensionActions,
 		contextActions: ExtensionContextActions,
 		providerActions?: {
-			registerProvider?: (name: string, config: ProviderConfig) => void;
-			unregisterProvider?: (name: string) => void;
+			registerProvider?: (name: string, config: ProviderConfig, extensionPath?: string) => void;
+			unregisterProvider?: (name: string, extensionPath?: string) => void;
 		},
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
@@ -345,9 +345,9 @@ export class ExtensionRunner {
 		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
 			try {
 				if (providerActions?.registerProvider) {
-					providerActions.registerProvider(name, config);
+					providerActions.registerProvider(name, config, extensionPath);
 				} else {
-					this.modelRegistry.registerProvider(name, config);
+					this.modelRegistry.registerProvider(name, config, extensionPath);
 				}
 			} catch (err) {
 				this.emitError({
@@ -362,19 +362,19 @@ export class ExtensionRunner {
 
 		// From this point on, provider registration/unregistration takes effect immediately
 		// without requiring a /reload.
-		this.runtime.registerProvider = (name, config) => {
+		this.runtime.registerProvider = (name, config, extensionPath) => {
 			if (providerActions?.registerProvider) {
-				providerActions.registerProvider(name, config);
+				providerActions.registerProvider(name, config, extensionPath);
 				return;
 			}
-			this.modelRegistry.registerProvider(name, config);
+			this.modelRegistry.registerProvider(name, config, extensionPath);
 		};
-		this.runtime.unregisterProvider = (name) => {
+		this.runtime.unregisterProvider = (name, extensionPath) => {
 			if (providerActions?.unregisterProvider) {
-				providerActions.unregisterProvider(name);
+				providerActions.unregisterProvider(name, extensionPath);
 				return;
 			}
-			this.modelRegistry.unregisterProvider(name);
+			this.modelRegistry.unregisterProvider(name, extensionPath);
 		};
 	}
 
