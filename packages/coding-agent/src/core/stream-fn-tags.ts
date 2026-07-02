@@ -1,5 +1,6 @@
-import type { StreamFn } from "@mizuikki/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 
+// #fork: explicit models
 export const SDK_DEFAULT_STREAM_FN = Symbol.for("pi.coding-agent.sdkDefaultStreamFn");
 
 type TaggedStreamFn = StreamFn & {

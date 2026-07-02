@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
-import { createModels, fauxAssistantMessage } from "@mizuikki/pi-ai";
-import { fauxProvider } from "@mizuikki/pi-ai/providers/faux";
+import { createModels, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,

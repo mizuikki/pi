@@ -2,7 +2,7 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
-import type { Models as ExplicitModels } from "@mizuikki/pi-ai";
+import type { Models as ExplicitModels } from "@earendil-works/pi-ai";
 import {
 	type AnthropicMessagesCompat,
 	type Api,
@@ -18,8 +18,8 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
-} from "@mizuikki/pi-ai/compat";
-import { registerOAuthProvider, resetOAuthProviders } from "@mizuikki/pi-ai/oauth";
+} from "@earendil-works/pi-ai/compat";
+import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { type Static, Type } from "typebox";
@@ -356,6 +356,7 @@ export class ModelRegistry {
 	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
+	// #fork: explicit models
 	private explicitModels: ExplicitModels | undefined;
 	readonly authStorage: AuthStorage;
 	private modelsJsonPath: string | undefined;
@@ -379,8 +380,14 @@ export class ModelRegistry {
 		return new ModelRegistry(authStorage, undefined, explicitModels);
 	}
 
+	// #fork: explicit models
 	setExplicitModels(explicitModels: ExplicitModels | undefined): void {
 		this.explicitModels = explicitModels;
+	}
+
+	// #fork: explicit models
+	getExplicitModelsSource(): ExplicitModels | undefined {
+		return this.explicitModels;
 	}
 
 	/**
@@ -645,6 +652,7 @@ export class ModelRegistry {
 	 * If models.json had errors, returns only built-in models.
 	 */
 	getAll(): Model<Api>[] {
+		// #fork: explicit models
 		return this.mergeExplicitModels(this.models);
 	}
 
@@ -654,6 +662,7 @@ export class ModelRegistry {
 	 * explicit providers are not treated as available.
 	 */
 	async getAvailable(): Promise<Model<Api>[]> {
+		// #fork: explicit models
 		const allModels = this.mergeExplicitModels(this.models);
 		const availability = await Promise.all(
 			allModels.map(async (model) => ({
@@ -670,6 +679,7 @@ export class ModelRegistry {
 	 * auth resolution is not available to sync callers.
 	 */
 	getAvailableSync(): Model<Api>[] {
+		// #fork: explicit models
 		return this.mergeExplicitModels(this.models.filter((m) => this.hasConfiguredAuthSync(m)));
 	}
 
@@ -684,6 +694,7 @@ export class ModelRegistry {
 	 * Check whether a model currently has resolvable auth.
 	 */
 	async hasConfiguredAuth(model: Model<Api>): Promise<boolean> {
+		// #fork: explicit models
 		const explicitModel = this.findExplicitModel(model.provider, model.id);
 		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
 			try {
@@ -700,6 +711,7 @@ export class ModelRegistry {
 	 * Synchronous availability check for non-explicit auth sources.
 	 */
 	hasConfiguredAuthSync(model: Model<Api>): boolean {
+		// #fork: explicit models
 		if (this.findExplicitModel(model.provider, model.id)) {
 			return this.explicitModels?.getProvider(model.provider) !== undefined;
 		}
@@ -747,6 +759,7 @@ export class ModelRegistry {
 	 * Get API key and request headers for a model.
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
+		// #fork: explicit models
 		const explicitModel = this.findExplicitModel(model.provider, model.id);
 		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
 			try {
@@ -755,15 +768,13 @@ export class ModelRegistry {
 					return { ok: false, error: `No API key found for "${model.provider}"` };
 				}
 
-				const authHeaders =
-					authResult.auth.headers &&
-					Object.entries(authResult.auth.headers).every((entry): entry is [string, string] => entry[1] !== null)
-						? Object.fromEntries(
-								Object.entries(authResult.auth.headers).filter(
-									(entry): entry is [string, string] => entry[1] !== null,
-								),
-							)
-						: undefined;
+				const authHeaders = authResult.auth.headers
+					? Object.fromEntries(
+							Object.entries(authResult.auth.headers).filter(
+								(entry): entry is [string, string] => entry[1] !== null,
+							),
+						)
+					: undefined;
 				const headers =
 					explicitModel.headers || authHeaders ? { ...explicitModel.headers, ...authHeaders } : undefined;
 
@@ -896,6 +907,7 @@ export class ModelRegistry {
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
 	isUsingOAuth(model: Model<Api>): boolean {
+		// #fork: explicit models
 		const explicitProvider = this.explicitModels?.getProvider(model.provider);
 		if (explicitProvider?.auth.oauth) {
 			return true;
@@ -906,6 +918,7 @@ export class ModelRegistry {
 	}
 
 	private getExplicitModels(): Model<Api>[] {
+		// #fork: explicit models
 		if (!this.explicitModels) {
 			return [];
 		}
@@ -968,10 +981,12 @@ export class ModelRegistry {
 		return explicitModels;
 	}
 
+	// #fork: explicit models
 	private findExplicitModel(provider: string, modelId: string): Model<Api> | undefined {
 		return this.getExplicitModels().find((model) => model.provider === provider && model.id === modelId);
 	}
 
+	// #fork: explicit models
 	private mergeExplicitModels(fallbackModels: Model<Api>[]): Model<Api>[] {
 		const explicitModels = this.getExplicitModels();
 		if (explicitModels.length === 0) {

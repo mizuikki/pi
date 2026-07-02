@@ -5,11 +5,12 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import type { AgentEvent, AgentMessage, ThinkingLevel } from "@mizuikki/pi-agent-core";
-import type { ImageContent } from "@mizuikki/pi-ai";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
 
@@ -34,8 +35,6 @@ export interface RpcClientOptions {
 	provider?: string;
 	/** Model ID to use */
 	model?: string;
-	/** Default timeout for waitForIdle(), collectEvents(), and promptAndWait(); 0 disables it. */
-	waitTimeoutMs?: number;
 	/** Additional CLI arguments */
 	args?: string[];
 }
@@ -49,12 +48,6 @@ export interface ModelInfo {
 
 export type RpcEventListener = (event: AgentEvent) => void;
 
-type RpcWaiter = {
-	reject: (error: Error) => void;
-	timer?: ReturnType<typeof setTimeout>;
-	unsubscribe?: () => void;
-};
-
 // ============================================================================
 // RPC Client
 // ============================================================================
@@ -65,7 +58,6 @@ export class RpcClient {
 	private eventListeners: RpcEventListener[] = [];
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
-	private pendingWaiters = new Set<RpcWaiter>();
 	private requestId = 0;
 	private stderr = "";
 	private exitError: Error | null = null;
@@ -116,14 +108,12 @@ export class RpcClient {
 			const error = this.createProcessExitError(code, signal);
 			this.exitError = error;
 			this.rejectPendingRequests(error);
-			this.abortWaitersForError(error);
 		});
 		childProcess.once("error", (error) => {
 			if (this.process !== childProcess) return;
 			const processError = new Error(`Agent process error: ${error.message}. Stderr: ${this.stderr}`);
 			this.exitError = processError;
 			this.rejectPendingRequests(processError);
-			this.abortWaitersForError(processError);
 		});
 		childProcess.stdin?.on("error", (error) => {
 			if (this.process !== childProcess) return;
@@ -131,7 +121,6 @@ export class RpcClient {
 				this.exitError ?? new Error(`Agent process stdin error: ${error.message}. Stderr: ${this.stderr}`);
 			this.exitError = stdinError;
 			this.rejectPendingRequests(stdinError);
-			this.abortWaitersForError(stdinError);
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -174,7 +163,6 @@ export class RpcClient {
 
 		this.process = null;
 		this.pendingRequests.clear();
-		this.clearPendingWaiters();
 	}
 
 	/**
@@ -402,6 +390,22 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get session entries in append order, optionally only those after the `since` entry id.
+	 */
+	async getEntries(since?: string): Promise<{ entries: SessionEntry[]; leafId: string | null }> {
+		const response = await this.send({ type: "get_entries", since });
+		return this.getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
+	}
+
+	/**
+	 * Get the session entry tree.
+	 */
+	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
+		const response = await this.send({ type: "get_tree" });
+		return this.getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/**
 	 * Get text of last assistant message.
 	 */
 	async getLastAssistantText(): Promise<string | null> {
@@ -440,25 +444,39 @@ export class RpcClient {
 	 * Wait for agent to become idle (no streaming).
 	 * Resolves when agent_end event is received.
 	 */
-	waitForIdle(timeout = this.getWaitTimeoutMs()): Promise<void> {
-		return this.waitForAgentEnd(timeout, "Timeout waiting for agent to become idle.");
+	waitForIdle(timeout = 60000): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				unsubscribe();
+				reject(new Error(`Timeout waiting for agent to become idle. Stderr: ${this.stderr}`));
+			}, timeout);
+
+			const unsubscribe = this.onEvent((event) => {
+				if (event.type === "agent_end") {
+					clearTimeout(timer);
+					unsubscribe();
+					resolve();
+				}
+			});
+		});
 	}
 
 	/**
 	 * Collect events until agent becomes idle.
 	 */
-	collectEvents(timeout = this.getWaitTimeoutMs()): Promise<AgentEvent[]> {
+	collectEvents(timeout = 60000): Promise<AgentEvent[]> {
 		return new Promise((resolve, reject) => {
 			const events: AgentEvent[] = [];
-			const waiter = this.createWaiter(reject);
-			waiter.timer = this.startWaitTimer(timeout, () => {
-				this.failWaiter(waiter, new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
-			});
+			const timer = setTimeout(() => {
+				unsubscribe();
+				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
+			}, timeout);
 
-			waiter.unsubscribe = this.onEvent((event) => {
+			const unsubscribe = this.onEvent((event) => {
 				events.push(event);
 				if (event.type === "agent_end") {
-					this.finishWaiter(waiter);
+					clearTimeout(timer);
+					unsubscribe();
 					resolve(events);
 				}
 			});
@@ -468,85 +486,15 @@ export class RpcClient {
 	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
-	async promptAndWait(
-		message: string,
-		images?: ImageContent[],
-		timeout = this.getWaitTimeoutMs(),
-	): Promise<AgentEvent[]> {
+	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
-		try {
-			await this.prompt(message, images);
-		} catch (error) {
-			const promptError = error instanceof Error ? error : new Error(String(error));
-			this.abortWaitersForError(promptError);
-			await eventsPromise.catch(() => {});
-			throw promptError;
-		}
+		await this.prompt(message, images);
 		return eventsPromise;
 	}
 
 	// =========================================================================
 	// Internal
 	// =========================================================================
-
-	private getWaitTimeoutMs(): number | undefined {
-		const timeout = this.options.waitTimeoutMs;
-		if (timeout === undefined || timeout <= 0) return undefined;
-		return timeout;
-	}
-
-	private createWaiter(reject: (error: Error) => void): RpcWaiter {
-		const waiter: RpcWaiter = { reject };
-		this.pendingWaiters.add(waiter);
-		return waiter;
-	}
-
-	private startWaitTimer(
-		timeout: number | undefined,
-		onTimeout: () => void,
-	): ReturnType<typeof setTimeout> | undefined {
-		if (timeout === undefined) return undefined;
-		return setTimeout(onTimeout, timeout);
-	}
-
-	private finishWaiter(waiter: RpcWaiter): void {
-		if (waiter.timer) clearTimeout(waiter.timer);
-		waiter.unsubscribe?.();
-		this.pendingWaiters.delete(waiter);
-	}
-
-	private failWaiter(waiter: RpcWaiter, error: Error): void {
-		this.finishWaiter(waiter);
-		waiter.reject(error);
-	}
-
-	private abortWaitersForError(error: Error): void {
-		for (const waiter of [...this.pendingWaiters]) {
-			this.failWaiter(waiter, error);
-		}
-	}
-
-	private clearPendingWaiters(): void {
-		for (const waiter of [...this.pendingWaiters]) {
-			this.finishWaiter(waiter);
-		}
-	}
-
-	private waitForAgentEnd(timeout: number | undefined, timeoutMessage: string): Promise<void> {
-		return new Promise((resolve, reject) => {
-			const waiter = this.createWaiter(reject);
-			waiter.timer = this.startWaitTimer(timeout, () => {
-				this.failWaiter(waiter, new Error(`${timeoutMessage} Stderr: ${this.stderr}`));
-			});
-
-			waiter.unsubscribe = this.onEvent((event) => {
-				if (event.type === "agent_end") {
-					this.finishWaiter(waiter);
-					resolve();
-				}
-			});
-		});
-	}
 
 	private handleLine(line: string): void {
 		try {

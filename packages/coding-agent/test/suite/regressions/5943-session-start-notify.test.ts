@@ -1,5 +1,5 @@
-import { fauxAssistantMessage } from "@mizuikki/pi-ai";
-import { Container, Text } from "@mizuikki/pi-tui";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { ExtensionUIContext } from "../../../src/core/extensions/index.ts";
@@ -97,6 +97,7 @@ type ReloadCommandContext = {
 	settingsManager: {
 		getHttpIdleTimeoutMs: () => number;
 		getHideThinkingBlock: () => boolean;
+		getOutputPad: () => 0 | 1;
 		getEditorPaddingX: () => number;
 		getAutocompleteMaxVisible: () => number;
 		getShowHardwareCursor: () => boolean;
@@ -168,6 +169,7 @@ function createReloadCommandContext(overrides: ReloadCommandContextOverrides = {
 		settingsManager: {
 			getHttpIdleTimeoutMs: () => 0,
 			getHideThinkingBlock: () => false,
+			getOutputPad: () => 1,
 			getEditorPaddingX: () => 1,
 			getAutocompleteMaxVisible: () => 10,
 			getShowHardwareCursor: () => false,
@@ -405,6 +407,37 @@ describe("regression #5943: session_start transient UI", () => {
 			expect(events).toContain("message_end:user:user from start");
 			expect(events).toContain("message_end:assistant:assistant from start");
 		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it("continues startup after session_start extension actions time out", async () => {
+		vi.useFakeTimers();
+		const errors: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", () => {
+						pi.sendUserMessage("user from start");
+					});
+				},
+			],
+		});
+		harness.setResponses([async () => await new Promise<never>(() => {})]);
+
+		try {
+			const bindPromise = harness.session.bindExtensions({
+				uiContext: createUiContext(() => {}),
+				mode: "tui",
+				onError: (error) => errors.push(error.error),
+			});
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			await bindPromise;
+
+			expect(errors).toContain("Timed out waiting 30000ms for extension actions during startup");
+		} finally {
+			vi.useRealTimers();
 			harness.cleanup();
 		}
 	});
