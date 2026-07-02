@@ -12,8 +12,8 @@ import {
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 	type OAuthProviderId,
-} from "@mizuikki/pi-ai/compat";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@mizuikki/pi-ai/oauth";
+} from "@earendil-works/pi-ai/compat";
+import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";

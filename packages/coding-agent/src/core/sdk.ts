@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type StreamFn, type ThinkingLevel } from "@mizuikki/pi-agent-core";
-import type { Models } from "@mizuikki/pi-ai";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@mizuikki/pi-ai/compat";
+import { Agent, type AgentMessage, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Models } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -46,6 +46,7 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model<any>;
+	// #fork: explicit models
 	/** Explicit Models collection. When provided, session model resolution and requests prefer it. */
 	models?: Models;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
@@ -141,7 +142,7 @@ function getDefaultAgentDir(): string {
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@mizuikki/pi-ai';
+ * import { getModel } from '@earendil-works/pi-ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',
@@ -176,12 +177,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
 	const authStorage = options.authStorage ?? AuthStorage.create(authPath);
+	// #fork: explicit models
 	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath, options.models);
-	modelRegistry.setExplicitModels(options.models);
+	if (options.models !== undefined) {
+		modelRegistry.setExplicitModels(options.models);
+	}
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
-	const explicitModels = options.models;
+	const explicitModels = options.models ?? modelRegistry.getExplicitModelsSource();
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -297,6 +301,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const defaultStreamFn: StreamFn = markSdkDefaultStreamFn(async (model, context, options) => {
+		// #fork: explicit models
 		if (explicitModels?.getProvider(model.provider)) {
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();

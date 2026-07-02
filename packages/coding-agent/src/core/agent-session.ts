@@ -21,11 +21,11 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
-	StreamFn,
+	PrepareNextTurnContext,
 	ThinkingLevel,
-} from "@mizuikki/pi-agent-core";
-import type { Models } from "@mizuikki/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mizuikki/pi-ai/compat";
+} from "@earendil-works/pi-agent-core";
+import type { Models } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -33,9 +33,8 @@ import {
 	isContextOverflow,
 	isRetryableAssistantError,
 	modelsAreEqual,
-	resetApiProviders,
 	streamSimple,
-} from "@mizuikki/pi-ai/compat";
+} from "@earendil-works/pi-ai/compat";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -172,6 +171,7 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Model registry for API key resolution and model discovery */
 	modelRegistry: ModelRegistry;
+	// #fork: explicit models
 	/** Explicit Models collection forwarded by SDK/runtime factories. */
 	models?: Models;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
@@ -263,6 +263,7 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+const EXTENSION_ACTION_WAIT_TIMEOUT_MS = 30_000;
 
 // ============================================================================
 // AgentSession Class
@@ -323,7 +324,7 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
-	private _pendingExtensionActions = new Set<Promise<void>>();
+	private _extensionActionPromises = new Set<Promise<void>>();
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
@@ -337,6 +338,7 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+	private _systemPromptOverride?: string;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -358,6 +360,7 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installAgentNextTurnRefresh();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -401,8 +404,12 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
-	private _usesSdkManagedStreamFn(streamFn: StreamFn): boolean {
-		return streamFn === streamSimple || isSdkDefaultStreamFn(streamFn);
+	private _usesCompatStreamSimple(): boolean {
+		return this.agent.streamFn === streamSimple;
+	}
+
+	private _usesSdkManagedStreamFn(): boolean {
+		return isSdkDefaultStreamFn(this.agent.streamFn);
 	}
 
 	private async _getCompactionRequestAuth(model: Model<any>): Promise<{
@@ -410,8 +417,12 @@ export class AgentSession {
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 	}> {
-		if (this._usesSdkManagedStreamFn(this.agent.streamFn)) {
+		if (this._usesCompatStreamSimple()) {
 			return this._getRequiredRequestAuth(model);
+		}
+
+		if (this._usesSdkManagedStreamFn()) {
+			return {};
 		}
 
 		const result = await this._modelRegistry.getApiKeyAndHeaders(model);
@@ -476,6 +487,29 @@ export class AgentSession {
 		};
 	}
 
+	private _installAgentNextTurnRefresh(): void {
+		const previousPrepareNextTurnWithContext =
+			this.agent.prepareNextTurnWithContext ??
+			(this.agent.prepareNextTurn
+				? async (_turn: PrepareNextTurnContext, signal?: AbortSignal) => await this.agent.prepareNextTurn?.(signal)
+				: undefined);
+		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+			const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+			const previousContext = previousSnapshot?.context ?? turn.context;
+
+			return {
+				...previousSnapshot,
+				context: {
+					...previousContext,
+					systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+					tools: this.agent.state.tools.slice(),
+				},
+				model: this.agent.state.model,
+				thinkingLevel: this.agent.state.thinkingLevel,
+			};
+		};
+	}
+
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================
@@ -493,19 +527,6 @@ export class AgentSession {
 			steering: [...this._steeringMessages],
 			followUp: [...this._followUpMessages],
 		});
-	}
-
-	private _trackPendingExtensionAction(action: Promise<void>): void {
-		this._pendingExtensionActions.add(action);
-		action.finally(() => {
-			this._pendingExtensionActions.delete(action);
-		});
-	}
-
-	private async _waitForPendingExtensionActions(): Promise<void> {
-		while (this._pendingExtensionActions.size > 0) {
-			await Promise.allSettled([...this._pendingExtensionActions]);
-		}
 	}
 
 	// Track last assistant message for auto-compaction check
@@ -851,7 +872,7 @@ export class AgentSession {
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
-		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this.agent.state.systemPrompt = this._systemPromptOverride ?? this._baseSystemPrompt;
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -979,6 +1000,7 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
+			this._systemPromptOverride = undefined;
 			this._flushPendingBashMessages();
 		}
 	}
@@ -1102,17 +1124,11 @@ export class AgentSession {
 				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 			}
 
-			// Check if we need to compact before sending (catches aborted responses)
+			// Check if we need to compact before sending (catches aborted responses).
+			// The user's new prompt is sent below, so do not call agent.continue() here.
 			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant && (await this._checkCompaction(lastAssistant, false))) {
-				try {
-					await this.agent.continue();
-					while (await this._handlePostAgentRun()) {
-						await this.agent.continue();
-					}
-				} finally {
-					this._flushPendingBashMessages();
-				}
+			if (lastAssistant) {
+				await this._checkCompaction(lastAssistant, false);
 			}
 
 			// Build messages array (custom message if any, then user message)
@@ -1156,10 +1172,12 @@ export class AgentSession {
 				}
 			}
 			// Apply extension-modified system prompt, or reset to base
-			if (result?.systemPrompt) {
+			if (result?.systemPrompt !== undefined) {
+				this._systemPromptOverride = result.systemPrompt;
 				this.agent.state.systemPrompt = result.systemPrompt;
 			} else {
 				// Ensure we're using the base prompt (in case previous turn had modifications)
+				this._systemPromptOverride = undefined;
 				this.agent.state.systemPrompt = this._baseSystemPrompt;
 			}
 		} catch (error) {
@@ -1950,20 +1968,7 @@ export class AgentSession {
 				return false;
 			}
 
-			let apiKey: string | undefined;
-			let headers: Record<string, string> | undefined;
-			let env: Record<string, string> | undefined;
-			if (this._usesSdkManagedStreamFn(this.agent.streamFn)) {
-				const authResult = await this._modelRegistry.getApiKeyAndHeaders(this.model);
-				if (!authResult.ok || !authResult.apiKey) {
-					return false;
-				}
-				apiKey = authResult.apiKey;
-				headers = authResult.headers;
-				env = authResult.env;
-			} else {
-				({ apiKey, headers, env } = await this._getCompactionRequestAuth(this.model));
-			}
+			const { apiKey, headers, env } = await this._getCompactionRequestAuth(this.model);
 
 			const pathEntries = this.sessionManager.getBranch();
 
@@ -2144,9 +2149,58 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
+		this._resetExtensionActionTracking();
 		await this._extensionRunner.emit(this._sessionStartEvent);
-		await this._waitForPendingExtensionActions();
+		await this._waitForExtensionActions("startup");
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+	}
+
+	private _resetExtensionActionTracking(): void {
+		this._extensionActionPromises = new Set();
+	}
+
+	private _trackExtensionAction(
+		event: "send_message" | "send_user_message",
+		runner: ExtensionRunner,
+		action: () => Promise<void>,
+	): void {
+		const promise = action().catch((err) => {
+			runner.emitError({
+				extensionPath: "<runtime>",
+				event,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+		this._extensionActionPromises.add(promise);
+		void promise.finally(() => {
+			this._extensionActionPromises.delete(promise);
+		});
+	}
+
+	private async _waitForExtensionActions(reason: "startup" | "reload"): Promise<void> {
+		const startedAt = Date.now();
+		while (this._extensionActionPromises.size > 0) {
+			const remainingMs = EXTENSION_ACTION_WAIT_TIMEOUT_MS - (Date.now() - startedAt);
+			if (remainingMs <= 0 || (await this._didExtensionActionWaitTimeout(remainingMs))) {
+				this._resetExtensionActionTracking();
+				this._extensionRunner.emitError({
+					extensionPath: "<runtime>",
+					event: "session_start",
+					error: `Timed out waiting ${EXTENSION_ACTION_WAIT_TIMEOUT_MS}ms for extension actions during ${reason}`,
+				});
+				return;
+			}
+		}
+	}
+
+	private async _didExtensionActionWaitTimeout(remainingMs: number): Promise<boolean> {
+		return new Promise((resolve) => {
+			const timeout = setTimeout(() => resolve(true), remainingMs);
+			void Promise.allSettled(Array.from(this._extensionActionPromises)).then(() => {
+				clearTimeout(timeout);
+				resolve(false);
+			});
+		});
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -2212,18 +2266,25 @@ export class AgentSession {
 			: undefined;
 	}
 
-	private _refreshCurrentModelFromRegistry(): void {
+	private _refreshCurrentModelFromRegistry(clearMissing = false): void {
 		const currentModel = this.model;
 		if (!currentModel) {
 			return;
 		}
 
 		const refreshedModel = this._modelRegistry.find(currentModel.provider, currentModel.id);
-		if (!refreshedModel || refreshedModel === currentModel) {
+		if (!refreshedModel) {
+			if (clearMissing) {
+				delete (this.agent.state as { model?: Model<any> }).model;
+			}
+			return;
+		}
+		if (refreshedModel === currentModel) {
 			return;
 		}
 
 		this.agent.state.model = refreshedModel;
+		this.setThinkingLevel(this.thinkingLevel);
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {
@@ -2255,24 +2316,10 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					const action = this.sendCustomMessage(message, options).catch((err) => {
-						runner.emitError({
-							extensionPath: "<runtime>",
-							event: "send_message",
-							error: err instanceof Error ? err.message : String(err),
-						});
-					});
-					this._trackPendingExtensionAction(action);
+					this._trackExtensionAction("send_message", runner, () => this.sendCustomMessage(message, options));
 				},
 				sendUserMessage: (content, options) => {
-					const action = this.sendUserMessage(content, options).catch((err) => {
-						runner.emitError({
-							extensionPath: "<runtime>",
-							event: "send_user_message",
-							error: err instanceof Error ? err.message : String(err),
-						});
-					});
-					this._trackPendingExtensionAction(action);
+					this._trackExtensionAction("send_user_message", runner, () => this.sendUserMessage(content, options));
 				},
 				appendEntry: (customType, data) => {
 					this.sessionManager.appendCustomEntry(customType, data);
@@ -2331,12 +2378,12 @@ export class AgentSession {
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
 			},
 			{
-				registerProvider: (name, config) => {
-					this._modelRegistry.registerProvider(name, config);
+				registerProvider: (name, config, owner) => {
+					this._modelRegistry.registerProvider(name, config, owner);
 					this._refreshCurrentModelFromRegistry();
 				},
-				unregisterProvider: (name) => {
-					this._modelRegistry.unregisterProvider(name);
+				unregisterProvider: (name, owner) => {
+					this._modelRegistry.unregisterProvider(name, owner);
 					this._refreshCurrentModelFromRegistry();
 				},
 			},
@@ -2491,17 +2538,19 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
-		const previousFlagValues = this._extensionRunner.getFlagValues();
-		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		const previousRunner = this._extensionRunner;
+		const previousFlagValues = previousRunner.getFlagValues();
+		await emitSessionShutdownEvent(previousRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
 		this.syncQueueModesFromSettings();
-		resetApiProviders();
 		await this._resourceLoader.reload();
+		this._modelRegistry.clearExtensionProviders();
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,
 			includeAllExtensionTools: true,
 		});
+		this._refreshCurrentModelFromRegistry();
 
 		const hasBindings =
 			this._extensionUIContext ||
@@ -2510,10 +2559,13 @@ export class AgentSession {
 			this._extensionErrorListener;
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
+			this._resetExtensionActionTracking();
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
-			await this._waitForPendingExtensionActions();
+			await this._waitForExtensionActions("reload");
 			await this.extendResourcesFromExtensions("reload");
 		}
+		this._refreshCurrentModelFromRegistry(true);
+		previousRunner.invalidate();
 	}
 
 	// =========================================================================
@@ -2726,7 +2778,9 @@ export class AgentSession {
 	 */
 	setSessionName(name: string): void {
 		this.sessionManager.appendSessionInfo(name);
-		this._emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
+		const event = { type: "session_info_changed", name: this.sessionManager.getSessionName() } as const;
+		this._emit(event);
+		void this._extensionRunner.emit(event);
 	}
 
 	// =========================================================================

@@ -2,11 +2,7 @@
 
 RPC mode enables headless operation of the coding agent via a JSON protocol over stdin/stdout. This is useful for embedding the agent in other applications, IDEs, or custom UIs.
 
-**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@mizuikki/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
-
-For `RpcClient`, `waitForIdle()`, `collectEvents()`, and `promptAndWait()` do not impose a client-side completion timeout by default. They wait until the agent emits `agent_end` or the subprocess exits with an error. To enforce a client-side completion timeout, set `waitTimeoutMs` in `RpcClientOptions` or pass an explicit timeout per call. `waitTimeoutMs: 0` also disables the client-side wait timer.
-
-To enforce a 60-second client-side completion timeout, pass `waitTimeoutMs: 60_000` when constructing the client.
+**Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@earendil-works/pi-coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
 
 ## Starting RPC Mode
 
@@ -661,6 +657,64 @@ Response:
       {"entryId": "abc123", "text": "First prompt..."},
       {"entryId": "def456", "text": "Second prompt..."}
     ]
+  }
+}
+```
+
+#### get_entries
+
+Get all session entries in append order (excluding the session header). The session is an append-only tree of entries with stable ids, so an entry id works as a durable cursor: pass the last entry id you have seen as `since` to get only entries strictly after it, even across client restarts. Unlike `get_messages`, this includes pre-compaction history and abandoned branches.
+
+```json
+{"type": "get_entries"}
+```
+
+With a cursor:
+```json
+{"type": "get_entries", "since": "abc123"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_entries",
+  "success": true,
+  "data": {
+    "entries": [
+      {"type": "message", "id": "def456", "parentId": "abc123", "timestamp": "...", "message": {"role": "user", "...": "..."}}
+    ],
+    "leafId": "def456"
+  }
+}
+```
+
+`leafId` is the id of the current leaf entry (`null` for an empty session), so a client can tell in one round trip whether the active branch moved. If `since` does not match any entry id, the response is `success: false`.
+
+#### get_tree
+
+Get the session as a tree of entries. Each node is `{entry, children, label?, labelTimestamp?}`. A well-formed session has a single root; orphaned entries (broken parent chain) also appear as roots.
+
+```json
+{"type": "get_tree"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_tree",
+  "success": true,
+  "data": {
+    "tree": [
+      {
+        "entry": {"type": "message", "id": "abc123", "parentId": null, "...": "..."},
+        "children": [
+          {"entry": {"type": "message", "id": "def456", "parentId": "abc123", "...": "..."}, "children": []}
+        ]
+      }
+    ],
+    "leafId": "def456"
   }
 }
 ```

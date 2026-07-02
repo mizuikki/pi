@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { ThinkingLevel } from "@mizuikki/pi-agent-core";
-import type { Model, Models } from "@mizuikki/pi-ai";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Model, Models } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AuthStorage } from "./auth-storage.ts";
@@ -41,6 +41,7 @@ export interface CreateAgentSessionServicesOptions {
 	authStorage?: AuthStorage;
 	settingsManager?: SettingsManager;
 	modelRegistry?: ModelRegistry;
+	// #fork: explicit models
 	models?: Models;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
@@ -58,6 +59,7 @@ export interface CreateAgentSessionFromServicesOptions {
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
 	model?: Model<any>;
+	// #fork: explicit models
 	models?: Models;
 	thinkingLevel?: ThinkingLevel;
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
@@ -79,6 +81,7 @@ export interface AgentSessionServices {
 	authStorage: AuthStorage;
 	settingsManager: SettingsManager;
 	modelRegistry: ModelRegistry;
+	// #fork: explicit models
 	models?: Models;
 	resourceLoader: ResourceLoader;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
@@ -146,7 +149,11 @@ export async function createAgentSessionServices(
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const modelRegistry =
 		options.modelRegistry ?? ModelRegistry.create(authStorage, join(agentDir, "models.json"), options.models);
-	modelRegistry.setExplicitModels(options.models);
+	if (options.models !== undefined) {
+		// #fork: explicit models
+		modelRegistry.setExplicitModels(options.models);
+	}
+	const explicitModels = options.models ?? modelRegistry.getExplicitModelsSource();
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
 		cwd,
@@ -159,7 +166,7 @@ export async function createAgentSessionServices(
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
 		try {
-			modelRegistry.registerProvider(name, config);
+			modelRegistry.registerProvider(name, config, extensionPath);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			diagnostics.push({
@@ -177,7 +184,8 @@ export async function createAgentSessionServices(
 		authStorage,
 		settingsManager,
 		modelRegistry,
-		models: options.models,
+		// #fork: explicit models
+		models: explicitModels,
 		resourceLoader,
 		diagnostics,
 	};
@@ -202,6 +210,7 @@ export async function createAgentSessionFromServices(
 		resourceLoader: options.services.resourceLoader,
 		sessionManager: options.sessionManager,
 		model: options.model,
+		// #fork: explicit models
 		models: options.models ?? options.services.models,
 		thinkingLevel: options.thinkingLevel,
 		scopedModels: options.scopedModels,

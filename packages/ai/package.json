@@ -1,6 +1,6 @@
 {
-	"name": "@mizuikki/pi-ai",
-	"version": "0.80.2",
+	"name": "@earendil-works/pi-ai",
+	"version": "0.80.3",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -78,7 +78,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/mizuikki/pi.git",
+		"url": "git+https://github.com/earendil-works/pi.git",
 		"directory": "packages/ai"
 	},
 	"engines": {

@@ -5,12 +5,12 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentMessage, AgentTool } from "@mizuikki/pi-agent-core";
-import { Agent } from "@mizuikki/pi-agent-core";
-import type { FauxModelDefinition, FauxResponseStep, Model, Models } from "@mizuikki/pi-ai";
-import { createModels, createProvider } from "@mizuikki/pi-ai";
-import type { FauxProviderHandle } from "@mizuikki/pi-ai/providers/faux";
-import { createFauxCore, fauxProvider } from "@mizuikki/pi-ai/providers/faux";
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { FauxModelDefinition, FauxResponseStep, Model, Models } from "@earendil-works/pi-ai";
+import { createModels, createProvider } from "@earendil-works/pi-ai";
+import type { FauxProviderHandle } from "@earendil-works/pi-ai/providers/faux";
+import { createFauxCore, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Model } from "@mizuikki/pi-ai";
-import { createModels, createProvider, fauxAssistantMessage } from "@mizuikki/pi-ai";
-import { fauxProvider } from "@mizuikki/pi-ai/providers/faux";
+import type { Model } from "@earendil-works/pi-ai";
+import { createModels, createProvider, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -11,7 +11,7 @@ import {
 	createAgentSessionServices,
 	SessionManager,
 	SettingsManager,
-} from "@mizuikki/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("regression: explicit models SDK session flows", () => {

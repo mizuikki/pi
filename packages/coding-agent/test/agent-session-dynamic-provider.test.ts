@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@mizuikki/pi-ai/compat";
+import { getModel } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import type { ExtensionFactory } from "../src/core/sdk.ts";
@@ -49,6 +50,28 @@ describe("AgentSession dynamic provider registration", () => {
 			resourceLoader,
 		});
 
+		return session;
+	}
+
+	async function createSessionFromServices(extensionFactories: ExtensionFactory[]) {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const sessionManager = SessionManager.inMemory();
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const services = await createAgentSessionServices({
+			cwd: tempDir,
+			agentDir,
+			authStorage,
+			settingsManager,
+			resourceLoaderOptions: {
+				extensionFactories,
+			},
+		});
+		const { session } = await createAgentSessionFromServices({
+			services,
+			sessionManager,
+			model: services.modelRegistry.find("anthropic", "claude-sonnet-4-5")!,
+		});
 		return session;
 	}
 
@@ -111,6 +134,149 @@ describe("AgentSession dynamic provider registration", () => {
 
 		expect(session.model?.baseUrl).toBe("http://localhost:8080/command");
 		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/command");
+
+		session.dispose();
+	});
+
+	it("reclamps thinking level when provider refresh swaps the active model", async () => {
+		const session = await createSession([
+			(pi) => {
+				pi.registerProvider("thinking-provider", {
+					api: "anthropic-messages",
+					baseUrl: "http://localhost:8080/thinking-provider",
+					apiKey: "thinking-key",
+					models: [
+						{
+							id: "thinking-model",
+							name: "Thinking Model",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 8192,
+						},
+					],
+				});
+				pi.registerCommand("downgrade-thinking", {
+					description: "Downgrade active model thinking support",
+					handler: async () => {
+						pi.registerProvider("thinking-provider", {
+							api: "anthropic-messages",
+							baseUrl: "http://localhost:8080/thinking-provider",
+							apiKey: "thinking-key",
+							models: [
+								{
+									id: "thinking-model",
+									name: "Thinking Model",
+									reasoning: false,
+									input: ["text"],
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+									contextWindow: 200000,
+									maxTokens: 8192,
+								},
+							],
+						});
+					},
+				});
+			},
+		]);
+
+		await session.bindExtensions({});
+		const thinkingModel = session.modelRegistry.find("thinking-provider", "thinking-model");
+		expect(thinkingModel).toBeDefined();
+		await session.setModel(thinkingModel!);
+		session.setThinkingLevel("high");
+
+		expect(session.thinkingLevel).toBe("high");
+
+		await session.prompt("/downgrade-thinking");
+
+		expect(session.model?.provider).toBe("thinking-provider");
+		expect(session.model?.id).toBe("thinking-model");
+		expect(session.thinkingLevel).toBe("off");
+
+		session.dispose();
+	});
+
+	it("reload clears removed extension provider overrides", async () => {
+		const defaultBaseUrl = getModel("anthropic", "claude-sonnet-4-5")!.baseUrl;
+		let overrideEnabled = true;
+		const session = await createSession([
+			(pi) => {
+				if (overrideEnabled) {
+					pi.registerProvider("anthropic", { baseUrl: "http://localhost:8080/reload" });
+				}
+			},
+		]);
+
+		expect(session.model?.baseUrl).toBe("http://localhost:8080/reload");
+		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/reload");
+
+		overrideEnabled = false;
+		await session.reload();
+
+		expect(session.model?.baseUrl).toBe(defaultBaseUrl);
+		expect(await capturePromptBaseUrl(session)).toBe(defaultBaseUrl);
+
+		session.dispose();
+	});
+
+	it("reload clears removed extension provider overrides through createAgentSessionServices", async () => {
+		const defaultBaseUrl = getModel("anthropic", "claude-sonnet-4-5")!.baseUrl;
+		let overrideEnabled = true;
+		const session = await createSessionFromServices([
+			(pi) => {
+				if (overrideEnabled) {
+					pi.registerProvider("anthropic", { baseUrl: "http://localhost:8080/services-reload" });
+				}
+			},
+		]);
+
+		expect(session.model?.baseUrl).toBe("http://localhost:8080/services-reload");
+
+		overrideEnabled = false;
+		await session.reload();
+
+		expect(session.model?.baseUrl).toBe(defaultBaseUrl);
+		expect(await capturePromptBaseUrl(session)).toBe(defaultBaseUrl);
+
+		session.dispose();
+	});
+
+	it("reload preserves the selected session_start provider model when it is re-registered", async () => {
+		const session = await createSession([
+			(pi) => {
+				pi.on("session_start", () => {
+					pi.registerProvider("reload-provider", {
+						api: "anthropic-messages",
+						baseUrl: "http://localhost:8080/reload-provider",
+						apiKey: "reload-key",
+						models: [
+							{
+								id: "reload-model",
+								name: "Reload Model",
+								reasoning: false,
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+								contextWindow: 200000,
+								maxTokens: 8192,
+							},
+						],
+					});
+				});
+			},
+		]);
+
+		await session.bindExtensions({ onError: () => {} });
+		const reloadModel = session.modelRegistry.find("reload-provider", "reload-model");
+		expect(reloadModel).toBeDefined();
+		await session.setModel(reloadModel!);
+
+		await session.reload();
+
+		expect(session.model?.provider).toBe("reload-provider");
+		expect(session.model?.id).toBe("reload-model");
+		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/reload-provider");
 
 		session.dispose();
 	});
