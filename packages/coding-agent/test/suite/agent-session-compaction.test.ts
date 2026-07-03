@@ -242,6 +242,10 @@ describe("AgentSession compaction characterization", () => {
 			errorMessage: "prompt is too long",
 			timestamp: Date.now(),
 		});
+		harness.session.agent.state.messages = [
+			{ role: "user", content: [{ type: "text", text: "oversized prompt" }], timestamp: Date.now() - 1000 },
+			overflowMessage,
+		];
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 		const compactionErrors: string[] = [];
 		harness.session.subscribe((event) => {
@@ -251,6 +255,7 @@ describe("AgentSession compaction characterization", () => {
 		});
 
 		await sessionInternals._checkCompaction(overflowMessage);
+		expect(harness.session.agent.state.messages).toContain(overflowMessage);
 		await sessionInternals._checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);

@@ -1948,8 +1948,6 @@ export class AgentSession {
 			}
 
 			this._overflowRecoveryAttempted = true;
-			// Remove the failed assistant from live context (it stays persisted in the session log).
-			this._removeAssistantMessageFromLiveState(assistantMessage);
 			return await this._runAutoCompaction("overflow", willRetry, assistantMessage);
 		}
 
