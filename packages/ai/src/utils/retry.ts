@@ -23,16 +23,22 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	"billing",
 ]);
 
+const USER_ABORT_ERROR_PATTERN = buildProviderErrorPattern([
+	"^request was aborted$",
+	"^operation aborted$",
+	"^the operation was aborted\\.?$",
+	"^aborterror(?:: (?:the )?operation was aborted\\.?)?$",
+]);
+
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Generic provider load, HTTP status, and server-side transient failures.
 	"overloaded",
 	"rate.?limit",
 	"too many requests",
-	"429",
-	"500",
-	"502",
-	"503",
-	"504",
+	"(?:http|status|status.?code|error.?code|response).*\\b429\\b",
+	"\\b429\\b.*(?:rate.?limit|too many requests)",
+	"(?:http|status|status.?code|error.?code|response).*\\b5(?:00|02|03|04)\\b",
+	"\\b5(?:00|02|03|04)\\b.*(?:server|internal|service|upstream|provider|error)",
 	"service.?unavailable",
 	"server.?error",
 	"internal.?error",
@@ -51,21 +57,33 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"other side closed",
 	"fetch failed",
 	"upstream.?connect",
+	"upstream.*aborted",
+	"request was aborted.*response",
+	"upstream.?aborted",
+	"STREAM_UPSTREAM_ABORTED",
 	"reset before headers",
 	"socket hang up",
 	"timed? out",
 	"timeout",
+	"stream.?timeout",
 	"terminated",
 
 	// WebSocket transports can report close/error text instead of HTTP/fetch text.
 	"websocket.?closed",
 	"websocket.?error",
+	"websocket stream closed before response\\.completed",
 
 	// Premature stream endings from SDKs and transports. Anthropic can throw
 	// "stream ended without ..." and "Anthropic stream ended before message_stop"
 	// (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
 	"ended without",
+	"stream.?read.?error",
+	"model.?stream.?error",
+	"stream.?error",
 	"stream ended before message_stop",
+	"terminal response event",
+	"response.?transmission.?abort(?:ed|s)?",
+	"response.?transport.?abort(?:ed|s)?",
 	"http2 request did not get a response",
 
 	// Provider-requested retry delay cap failures should flow through the outer
@@ -89,8 +107,11 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
  * before restarting the assistant turn.
  */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error" || !message.errorMessage) return false;
+	if ((message.stopReason !== "error" && message.stopReason !== "aborted") || !message.errorMessage) {
+		return false;
+	}
 	const errorMessage = message.errorMessage;
+	if (USER_ABORT_ERROR_PATTERN.test(errorMessage)) return false;
 	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return false;
 	return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
 }

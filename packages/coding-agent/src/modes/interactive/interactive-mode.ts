@@ -2851,15 +2851,16 @@ export class InteractiveMode {
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
+					let displayMessage = this.streamingMessage;
 					if (this.streamingMessage.stopReason === "aborted") {
 						const retryAttempt = this.session.retryAttempt;
 						errorMessage =
 							retryAttempt > 0
 								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
 								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
+						displayMessage = { ...this.streamingMessage, errorMessage };
 					}
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.updateContent(displayMessage);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
