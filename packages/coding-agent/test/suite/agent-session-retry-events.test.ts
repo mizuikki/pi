@@ -2,7 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
 function normalizeEventOrder(events: Harness["events"]): string[] {
 	const normalized: string[] = [];
@@ -52,6 +52,38 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.session.isRetrying).toBe(false);
 	});
 
+	it("retries retryable aborted transport failures and keeps the failed attempt in session history", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		const errorMessage = "OpenAI Responses stream ended before a terminal response event";
+		harness.setResponses([
+			fauxAssistantMessage("partial", { stopReason: "aborted", errorMessage }),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("test");
+
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.eventsOfType("auto_retry_start").map((event) => event.errorMessage)).toEqual([errorMessage]);
+		expect(harness.eventsOfType("auto_retry_end").map((event) => event.success)).toEqual([true]);
+		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, false]);
+
+		const persistedAssistants = harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+		expect(persistedAssistants).toHaveLength(2);
+		if (persistedAssistants[0]?.type === "message" && persistedAssistants[0].message.role === "assistant") {
+			expect(persistedAssistants[0].message.stopReason).toBe("aborted");
+			expect(persistedAssistants[0].message.errorMessage).toBe(errorMessage);
+		}
+
+		const liveAssistants = harness.session.messages.filter((message) => message.role === "assistant");
+		expect(liveAssistants).toHaveLength(1);
+		if (liveAssistants[0]?.role === "assistant") {
+			expect(getMessageText(liveAssistants[0])).toBe("recovered");
+		}
+	});
+
 	it("retries multiple transient failures and succeeds on the final attempt", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
 		harnesses.push(harness);
@@ -65,6 +97,27 @@ describe("AgentSession retry and event characterization", () => {
 			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
 			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
 			fauxAssistantMessage("success"),
+		]);
+
+		await harness.session.prompt("test");
+
+		expect(retryEvents).toEqual(["start:1", "start:2", "end:true"]);
+		expect(harness.faux.state.callCount).toBe(3);
+	});
+
+	it("does not treat aborted retry failures as successful recovery", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		const retryEvents: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") retryEvents.push(`start:${event.attempt}`);
+			if (event.type === "auto_retry_end") retryEvents.push(`end:${event.success}`);
+		});
+
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("partial", { stopReason: "aborted", errorMessage: "STREAM_UPSTREAM_ABORTED" }),
+			fauxAssistantMessage("recovered"),
 		]);
 
 		await harness.session.prompt("test");
@@ -143,6 +196,18 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.eventsOfType("auto_retry_start")).toEqual([]);
 	});
 
+	it("does not retry user-aborted assistant failures", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "Request was aborted" })]);
+
+		await harness.session.prompt("test");
+
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.eventsOfType("auto_retry_start")).toEqual([]);
+		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([false]);
+	});
+
 	it("cancels retry sleep when abortRetry is called", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 100 } } });
 		harnesses.push(harness);
@@ -197,6 +262,43 @@ describe("AgentSession retry and event characterization", () => {
 		expect(toolRuns).toEqual(["hello"]);
 		expect(harness.session.isStreaming).toBe(false);
 		await harness.session.prompt("follow-up");
+		expect(harness.faux.state.callCount).toBe(4);
+	});
+
+	it("keeps retry budget across retry recovery tool calls", async () => {
+		const toolRuns: string[] = [];
+		const echoTool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo text back",
+			parameters: Type.Object({ text: Type.String() }),
+			execute: async (_toolCallId, params) => {
+				const text = typeof params === "object" && params !== null && "text" in params ? String(params.text) : "";
+				toolRuns.push(text);
+				return { content: [{ type: "text", text: `echo:${text}` }], details: { text } };
+			},
+		};
+		const harness = await createHarness({
+			tools: [echoTool],
+			settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } },
+		});
+		harnesses.push(harness);
+		const retryEvents: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") retryEvents.push(`start:${event.attempt}`);
+			if (event.type === "auto_retry_end") retryEvents.push(`end:${event.success}`);
+		});
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage([fauxToolCall("echo", { text: "hello" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "STREAM_UPSTREAM_ABORTED" }),
+			fauxAssistantMessage("final answer"),
+		]);
+
+		await harness.session.prompt("test");
+
+		expect(retryEvents).toEqual(["start:1", "start:2", "end:true"]);
+		expect(toolRuns).toEqual(["hello"]);
 		expect(harness.faux.state.callCount).toBe(4);
 	});
 

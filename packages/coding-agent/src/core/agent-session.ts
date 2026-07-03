@@ -588,13 +588,16 @@ export class AgentSession {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
+				const completedOutcome = this._isCompletedAssistantOutcome(assistantMsg);
+				if (completedOutcome) {
 					this._overflowRecoveryAttempted = false;
 				}
 
-				// Reset retry counter immediately on successful assistant response
-				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
+				// Reset retry counter only when the user-visible recovery turn produces
+				// a final successful assistant outcome. A toolUse message is an
+				// intermediate step, so keeping the attempt counter preserves the retry
+				// budget across tool execution plus any later continuation failures.
+				if (this._isRetrySuccessfulOutcome(assistantMsg) && this._retryAttempt > 0) {
 					this._emit({
 						type: "auto_retry_end",
 						success: true,
@@ -640,6 +643,35 @@ export class AgentSession {
 			}
 		}
 		return undefined;
+	}
+
+	private _isCompletedAssistantOutcome(message: AssistantMessage): boolean {
+		return message.stopReason === "stop" || message.stopReason === "length" || message.stopReason === "toolUse";
+	}
+
+	private _isRetrySuccessfulOutcome(message: AssistantMessage): boolean {
+		return message.stopReason === "stop" || message.stopReason === "length";
+	}
+
+	private _isSameAssistantMessage(left: AssistantMessage, right: AssistantMessage): boolean {
+		return (
+			left.timestamp === right.timestamp &&
+			left.stopReason === right.stopReason &&
+			left.errorMessage === right.errorMessage
+		);
+	}
+
+	private _removeAssistantMessageFromLiveState(target: AssistantMessage): void {
+		const messages = this.agent.state.messages;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			const assistantMessage = message as AssistantMessage;
+			if (assistantMessage === target || this._isSameAssistantMessage(assistantMessage, target)) {
+				this.agent.state.messages = [...messages.slice(0, i), ...messages.slice(i + 1)];
+				return;
+			}
+		}
 	}
 
 	private _replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
@@ -1016,7 +1048,7 @@ export class AgentSession {
 			return true;
 		}
 
-		if (msg.stopReason === "error" && this._retryAttempt > 0) {
+		if (!this._isCompletedAssistantOutcome(msg) && this._retryAttempt > 0) {
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
@@ -1896,7 +1928,7 @@ export class AgentSession {
 		// but must not retry: the assistant answer already completed and agent.continue() cannot
 		// continue from an assistant message.
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
-			const willRetry = assistantMessage.stopReason !== "stop";
+			const willRetry = assistantMessage.stopReason === "error";
 
 			if (!willRetry) {
 				return await this._runAutoCompaction("overflow", false);
@@ -1916,13 +1948,7 @@ export class AgentSession {
 			}
 
 			this._overflowRecoveryAttempted = true;
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.state.messages = messages.slice(0, -1);
-			}
-			return await this._runAutoCompaction("overflow", willRetry);
+			return await this._runAutoCompaction("overflow", willRetry, assistantMessage);
 		}
 
 		// Case 2: Threshold - context is getting large
@@ -1959,7 +1985,11 @@ export class AgentSession {
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		retryMessage?: AssistantMessage,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		let started = false;
 
@@ -2084,10 +2114,8 @@ export class AgentSession {
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) {
-				const messages = this.agent.state.messages;
-				const lastMsg = messages[messages.length - 1];
-				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
-					this.agent.state.messages = messages.slice(0, -1);
+				if (retryMessage) {
+					this._removeAssistantMessageFromLiveState(retryMessage);
 				}
 				return true;
 			}
@@ -2610,11 +2638,8 @@ export class AgentSession {
 			errorMessage: message.errorMessage || "Unknown error",
 		});
 
-		// Remove error message from agent state (keep in session for history)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.state.messages = messages.slice(0, -1);
-		}
+		// Remove the failed assistant from live state but keep it in the session log.
+		this._removeAssistantMessageFromLiveState(message);
 
 		// Wait with exponential backoff (abortable)
 		this._retryAbortController = new AbortController();
