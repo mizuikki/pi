@@ -967,6 +967,10 @@ export class DefaultPackageManager implements PackageManager {
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
 		const configuredPackages: ConfiguredPackage[] = [];
+		const sources = [
+			...(projectSettings.packages ?? []).map((pkg) => ({ pkg, scope: "project" as const })),
+			...(globalSettings.packages ?? []).map((pkg) => ({ pkg, scope: "user" as const })),
+		];
 
 		for (const pkg of globalSettings.packages ?? []) {
 			const source = typeof pkg === "string" ? pkg : pkg.source;
@@ -980,11 +984,12 @@ export class DefaultPackageManager implements PackageManager {
 
 		for (const pkg of projectSettings.packages ?? []) {
 			const source = typeof pkg === "string" ? pkg : pkg.source;
+			const deltaBase = this.findAutoloadDeltaBase(pkg, "project", sources);
 			configuredPackages.push({
 				source,
 				scope: "project",
 				filtered: typeof pkg === "object",
-				installedPath: this.getInstalledPath(source, "project"),
+				installedPath: this.getInstalledPath(deltaBase?.source ?? source, deltaBase?.scope ?? "project"),
 			});
 		}
 
@@ -1048,6 +1053,10 @@ export class DefaultPackageManager implements PackageManager {
 	async update(source?: string): Promise<void> {
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
+		const configuredSources = [
+			...(projectSettings.packages ?? []).map((pkg) => ({ pkg, scope: "project" as const })),
+			...(globalSettings.packages ?? []).map((pkg) => ({ pkg, scope: "user" as const })),
+		];
 		const identity = source ? this.getPackageIdentity(source) : undefined;
 		let matched = false;
 		const updateSources: ConfiguredUpdateSource[] = [];
@@ -1062,7 +1071,13 @@ export class DefaultPackageManager implements PackageManager {
 			const sourceStr = typeof pkg === "string" ? pkg : pkg.source;
 			if (identity && this.getPackageIdentity(sourceStr, "project") !== identity) continue;
 			matched = true;
-			updateSources.push({ source: sourceStr, scope: "project" });
+			const deltaBase = this.findAutoloadDeltaBase(pkg, "project", configuredSources);
+			const updateSource = deltaBase ?? { source: sourceStr, scope: "project" as const };
+			if (
+				!updateSources.some((entry) => entry.source === updateSource.source && entry.scope === updateSource.scope)
+			) {
+				updateSources.push(updateSource);
+			}
 		}
 
 		if (source && !matched) {
@@ -1302,7 +1317,7 @@ export class DefaultPackageManager implements PackageManager {
 		pkg: PackageSource,
 		scope: SourceScope,
 		sources: Array<{ pkg: PackageSource; scope: SourceScope }>,
-	): { source: string; scope: SourceScope } | undefined {
+	): { source: string; scope: InstalledSourceScope } | undefined {
 		if (scope !== "project" || typeof pkg !== "object" || pkg.autoload !== false) return undefined;
 		const identity = this.getPackageIdentity(pkg.source, scope);
 		const userEntry = sources.find(

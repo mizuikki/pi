@@ -402,6 +402,31 @@ describe("package commands", () => {
 		expect(settingsManager.getProjectSettings().packages).toEqual([]);
 	});
 
+	it("preserves a pre-existing autoload-disabled package when clearing an override", () => {
+		const storage = new InMemorySettingsStorage();
+		storage.withLock("global", () => JSON.stringify({ packages: ["npm:pi-tools"] }));
+		storage.withLock("project", () => JSON.stringify({ packages: [{ source: "npm:pi-tools", autoload: false }] }));
+		const settingsManager = SettingsManager.fromStorage(storage, { projectTrusted: true });
+		const resolvedPaths = extensionPaths(join(tempDir, "pkg"), "npm:pi-tools", "user", ["bar.ts"]);
+		const selector = new ConfigSelectorComponent(
+			{ global: resolvedPaths, project: resolvedPaths },
+			settingsManager,
+			projectDir,
+			agentDir,
+			() => {},
+			() => {},
+			() => {},
+			24,
+			"project",
+		);
+
+		selector.getResourceList().handleInput(" ");
+		selector.getResourceList().handleInput(" ");
+		selector.getResourceList().handleInput(" ");
+
+		expect(settingsManager.getProjectSettings().packages).toEqual([{ source: "npm:pi-tools", autoload: false }]);
+	});
+
 	it("shows a friendly error for unknown install options", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

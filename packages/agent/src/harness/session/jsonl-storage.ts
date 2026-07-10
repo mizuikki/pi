@@ -109,6 +109,20 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 		parentId?: unknown;
 		timestamp?: unknown;
 		targetId?: unknown;
+		message?: unknown;
+		thinkingLevel?: unknown;
+		provider?: unknown;
+		modelId?: unknown;
+		activeToolNames?: unknown;
+		summary?: unknown;
+		firstKeptEntryId?: unknown;
+		tokensBefore?: unknown;
+		fromId?: unknown;
+		customType?: unknown;
+		content?: unknown;
+		display?: unknown;
+		label?: unknown;
+		name?: unknown;
 	};
 	if (typeof entry.type !== "string") throw invalidEntry(filePath, lineNumber, "is missing entry type");
 	if (typeof entry.id !== "string" || !entry.id) throw invalidEntry(filePath, lineNumber, "is missing entry id");
@@ -118,8 +132,72 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 	if (typeof entry.timestamp !== "string" || !entry.timestamp) {
 		throw invalidEntry(filePath, lineNumber, "is missing timestamp");
 	}
-	if (entry.type === "leaf" && entry.targetId !== null && typeof entry.targetId !== "string") {
-		throw invalidEntry(filePath, lineNumber, "has invalid targetId");
+	const requireString = (value: unknown, field: string): void => {
+		if (typeof value !== "string" || !value) throw invalidEntry(filePath, lineNumber, `is missing ${field}`);
+	};
+	const requireObject = (value: unknown, field: string): void => {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			throw invalidEntry(filePath, lineNumber, `has invalid ${field}`);
+		}
+	};
+
+	switch (entry.type) {
+		case "message":
+			requireObject(entry.message, "message");
+			break;
+		case "thinking_level_change":
+			requireString(entry.thinkingLevel, "thinkingLevel");
+			break;
+		case "model_change":
+			requireString(entry.provider, "provider");
+			requireString(entry.modelId, "modelId");
+			break;
+		case "active_tools_change":
+			if (
+				!Array.isArray(entry.activeToolNames) ||
+				!entry.activeToolNames.every((name) => typeof name === "string")
+			) {
+				throw invalidEntry(filePath, lineNumber, "has invalid activeToolNames");
+			}
+			break;
+		case "compaction":
+			requireString(entry.summary, "summary");
+			requireString(entry.firstKeptEntryId, "firstKeptEntryId");
+			if (typeof entry.tokensBefore !== "number")
+				throw invalidEntry(filePath, lineNumber, "has invalid tokensBefore");
+			break;
+		case "branch_summary":
+			requireString(entry.fromId, "fromId");
+			requireString(entry.summary, "summary");
+			break;
+		case "custom":
+			requireString(entry.customType, "customType");
+			break;
+		case "custom_message":
+			requireString(entry.customType, "customType");
+			if (typeof entry.content !== "string" && !Array.isArray(entry.content)) {
+				throw invalidEntry(filePath, lineNumber, "has invalid content");
+			}
+			if (typeof entry.display !== "boolean") throw invalidEntry(filePath, lineNumber, "has invalid display");
+			break;
+		case "label":
+			requireString(entry.targetId, "targetId");
+			if (entry.label !== undefined && typeof entry.label !== "string") {
+				throw invalidEntry(filePath, lineNumber, "has invalid label");
+			}
+			break;
+		case "session_info":
+			if (entry.name !== undefined && typeof entry.name !== "string") {
+				throw invalidEntry(filePath, lineNumber, "has invalid name");
+			}
+			break;
+		case "leaf":
+			if (entry.targetId !== null && typeof entry.targetId !== "string") {
+				throw invalidEntry(filePath, lineNumber, "has invalid targetId");
+			}
+			break;
+		default:
+			throw invalidEntry(filePath, lineNumber, `has unsupported entry type ${JSON.stringify(entry.type)}`);
 	}
 	return entry as SessionTreeEntry;
 }

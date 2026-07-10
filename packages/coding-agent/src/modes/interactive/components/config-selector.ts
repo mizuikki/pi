@@ -230,6 +230,7 @@ class ResourceList implements Component, Focusable {
 	private cwd: string;
 	private agentDir: string;
 	private writeScope: ConfigWriteScope;
+	private createdProjectPackageOverrides = new Set<string>();
 	private inheritedEnabledByKey: Map<string, boolean>;
 
 	public onCancel?: () => void;
@@ -705,7 +706,11 @@ class ResourceList implements Component, Focusable {
 		);
 		if (pkgIndex === -1) {
 			if (state === "inherit") return false;
-			packages.push(this.createPackageOverrideSource(item));
+			const createdPackage = this.createPackageOverrideSource(item);
+			packages.push(createdPackage);
+			this.createdProjectPackageOverrides.add(
+				typeof createdPackage === "string" ? createdPackage : createdPackage.source,
+			);
 			pkgIndex = packages.length - 1;
 		}
 		let pkg = packages[pkgIndex];
@@ -721,8 +726,12 @@ class ResourceList implements Component, Focusable {
 		if (state !== "inherit") updated.push(`${state === "load" ? "+" : "-"}${pattern}`);
 		(pkg as Record<string, unknown>)[item.resourceType] = updated.length > 0 ? updated : undefined;
 		if (!RESOURCE_TYPES.some((key) => (pkg as Record<string, unknown>)[key] !== undefined)) {
-			if (pkg.autoload === false) packages.splice(pkgIndex, 1);
-			else packages[pkgIndex] = pkg.source;
+			if (pkg.autoload === false && this.createdProjectPackageOverrides.has(pkg.source)) {
+				packages.splice(pkgIndex, 1);
+				this.createdProjectPackageOverrides.delete(pkg.source);
+			} else if (pkg.autoload !== false) {
+				packages[pkgIndex] = pkg.source;
+			}
 		}
 		this.settingsManager.setProjectPackages(packages);
 		return true;

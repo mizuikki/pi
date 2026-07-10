@@ -325,7 +325,7 @@ function loadRawConfig(path: string): Record<string, unknown> | undefined {
 	if (!existsSync(path)) return undefined;
 	try {
 		const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		if (typeof parsed !== "object" || parsed === null) return undefined;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
 		return parsed as Record<string, unknown>;
 	} catch {
 		return undefined;

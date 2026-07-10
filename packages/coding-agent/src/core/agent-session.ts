@@ -895,7 +895,7 @@ export class AgentSession {
 
 	/** Whether the session has no active agent run, retry, auto-compaction, or queued continuation. */
 	get isIdle(): boolean {
-		return !this._isAgentRunActive;
+		return !this._isAgentRunActive && !this.isCompacting;
 	}
 
 	/** Current effective system prompt (includes any per-turn extension modifications) */

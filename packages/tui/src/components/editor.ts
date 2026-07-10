@@ -318,7 +318,7 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<EditorState>();
+	private undoStack = new UndoStack<{ state: EditorState; pastes: Map<number, string>; pasteCounter: number }>();
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
@@ -999,13 +999,13 @@ export class Editor implements Component, Focusable {
 		this.cancelAutocomplete();
 		this.lastAction = null;
 		this.exitHistoryBrowsing();
-		this.pastes.clear();
-		this.pasteCounter = 0;
 		const normalized = this.normalizeText(text);
 		// Push undo snapshot if content differs (makes programmatic changes undoable)
 		if (this.getText() !== normalized) {
 			this.pushUndoSnapshot();
 		}
+		this.pastes.clear();
+		this.pasteCounter = 0;
 		this.setTextInternal(normalized);
 	}
 
@@ -1281,22 +1281,16 @@ export class Editor implements Component, Focusable {
 			if (isPastedSegmented) {
 				// This contains the id part e.g 4 from [paste #4 +123 lines]
 				const targetId = Number(isPastedSegmented[1]);
-				this.pastes.delete(targetId);
-				this.pasteCounter--;
-
-				// We got to update id of markers which are greater than the removed one
-				this.state.lines = this.state.lines.map((line) =>
-					line.replace(PASTE_MARKER_REGEX, (fullMatch, idGroup, suffixGroup) => {
-						const x = Number(idGroup);
-						if (x <= targetId) return fullMatch;
-
-						// [paste #3] become [paste #2] if we remove [paste #1]
-						const newText = `[paste #${x - 1}${suffixGroup}]`;
-						this.pastes.set(x - 1, this.pastes.get(x) ?? newText);
-						this.pastes.delete(x);
-						return newText;
-					}),
+				const before = line.slice(0, this.state.cursorCol - graphemeLength);
+				const after = line.slice(this.state.cursorCol);
+				this.state.lines[this.state.cursorLine] = before + after;
+				this.setCursorCol(this.state.cursorCol - graphemeLength);
+				const markerStillExists = this.state.lines.some((currentLine) =>
+					Array.from(currentLine.matchAll(PASTE_MARKER_REGEX)).some((match) => Number(match[1]) === targetId),
 				);
+				if (!markerStillExists) this.pastes.delete(targetId);
+				if (this.onChange) this.onChange(this.getText());
+				return;
 			}
 
 			line = this.state.lines[this.state.cursorLine] || "";
@@ -1994,14 +1988,16 @@ export class Editor implements Component, Focusable {
 	}
 
 	private pushUndoSnapshot(): void {
-		this.undoStack.push(this.state);
+		this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
 	}
 
 	private undo(): void {
 		this.exitHistoryBrowsing();
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
-		Object.assign(this.state, snapshot);
+		Object.assign(this.state, snapshot.state);
+		this.pastes = snapshot.pastes;
+		this.pasteCounter = snapshot.pasteCounter;
 		this.lastAction = null;
 		this.preferredVisualCol = null;
 		if (this.onChange) {

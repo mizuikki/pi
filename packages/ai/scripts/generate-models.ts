@@ -2171,6 +2171,7 @@ async function generateModels() {
 				output: model.cost.output,
 				cacheRead: model.cost.cacheRead,
 				cacheWrite: model.cost.cacheWrite,
+				...(model.cost.tiers ? { tiers: model.cost.tiers } : {}),
 			},
 			contextWindow: AZURE_CONTEXT_WINDOW_OVERRIDES[model.id] ?? model.contextWindow,
 		}));

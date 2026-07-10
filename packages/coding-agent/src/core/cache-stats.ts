@@ -125,7 +125,8 @@ function scan(
 				totals.missCount += 1;
 				misses.set(entry.message, miss);
 			}
-			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+			const modelKey = `${entry.message.provider}/${entry.message.model}`;
+			prev = asPreviousRequest(entry.message, prev?.modelKey === modelKey ? prev.reportedCache : false) ?? prev;
 		}
 	}
 	return { prev, totals, misses };

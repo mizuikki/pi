@@ -26,6 +26,7 @@ const SHARE_URL_RE = /^https:\/\/pi\.dev\/session\/#([0-9a-fA-F]{20,})(?:[/#?].*
 const ISSUE_URL_RE = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:[/#?].*)?$/;
 const GIST_URL_IN_TEXT_RE = /https:\/\/gist\.github\.com\/(?:[^/\s]+\/)?([0-9a-fA-F]{20,})\b/g;
 const SESSION_DATA_RE = /<script id="session-data" type="application\/json">([^<]+)<\/script>/;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 interface SessionHeader {
 	type: "session";
@@ -219,8 +220,21 @@ function rewriteSessionCwd(raw: string, sourceCwd: string, targetCwd: string): s
 	return rewritten;
 }
 
+async function fetchGitHub(url: string, headers: Record<string, string>): Promise<Response> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	try {
+		return await fetch(url, { headers, signal: controller.signal });
+	} catch (error) {
+		if (controller.signal.aborted) throw new Error(`request to ${url} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 async function fetchText(url: string): Promise<string> {
-	const response = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
+	const response = await fetchGitHub(url, { Accept: "application/vnd.github+json" });
 	if (!response.ok) {
 		throw new Error(`failed to fetch ${url}: HTTP ${response.status}`);
 	}
@@ -237,9 +251,9 @@ async function findIssueGistId(owner: string, repo: string, issue: string): Prom
 	const gistIds: string[] = [];
 	let page = 1;
 	while (true) {
-		const response = await fetch(
+		const response = await fetchGitHub(
 			`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(issue)}/comments?per_page=100&page=${page}`,
-			{ headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } },
+			{ Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
 		);
 		if (!response.ok) throw new Error(`failed to fetch issue comments: HTTP ${response.status}`);
 
@@ -261,11 +275,9 @@ async function findIssueGistId(owner: string, repo: string, issue: string): Prom
 }
 
 async function fetchGistSession(gistId: string): Promise<{ header: SessionHeader; jsonl: string }> {
-	const response = await fetch(`https://api.github.com/gists/${gistId}`, {
-		headers: {
-			Accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2022-11-28",
-		},
+	const response = await fetchGitHub(`https://api.github.com/gists/${gistId}`, {
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
 	});
 	if (!response.ok) throw new Error(`failed to fetch gist ${gistId}: HTTP ${response.status}`);
 
