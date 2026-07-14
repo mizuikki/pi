@@ -37,8 +37,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"too many requests",
 	"(?:http|status|status.?code|error.?code|response).*\\b429\\b",
 	"\\b429\\b.*(?:rate.?limit|too many requests)",
-	"(?:http|status|status.?code|error.?code|response).*\\b5(?:00|02|03|04)\\b",
-	"\\b5(?:00|02|03|04)\\b.*(?:server|internal|service|upstream|provider|error)",
+	"(?:http|status|status.?code|error.?code|response).*\\b5(?:00|02|03|04|24)\\b",
+	"\\b5(?:00|02|03|04|24)\\b.*(?:server|internal|service|upstream|provider|error|status|timeout|cloudflare|no body)",
 	"service.?unavailable",
 	"server.?error",
 	"internal.?error",
@@ -63,6 +63,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"STREAM_UPSTREAM_ABORTED",
 	"reset before headers",
 	"socket hang up",
+	"socket connection was closed",
 	"timed? out",
 	"timeout",
 	"stream.?timeout",
@@ -95,6 +96,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"you can retry your request",
 	"try your request again",
 	"please retry your request",
+
+	// gRPC based providers (e.g. NVIDIA NIM)
+	"ResourceExhausted",
 ]);
 
 /**

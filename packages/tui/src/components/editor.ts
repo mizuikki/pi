@@ -318,7 +318,7 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<EditorState>();
+	private undoStack = new UndoStack<{ state: EditorState; pastes: Map<number, string>; pasteCounter: number }>();
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
@@ -1004,6 +1004,8 @@ export class Editor implements Component, Focusable {
 		if (this.getText() !== normalized) {
 			this.pushUndoSnapshot();
 		}
+		this.pastes.clear();
+		this.pasteCounter = 0;
 		this.setTextInternal(normalized);
 	}
 
@@ -1267,13 +1269,31 @@ export class Editor implements Component, Focusable {
 			this.pushUndoSnapshot();
 
 			// Delete grapheme before cursor (handles emojis, combining characters, etc.)
-			const line = this.state.lines[this.state.cursorLine] || "";
+			let line = this.state.lines[this.state.cursorLine] || "";
 			const beforeCursor = line.slice(0, this.state.cursorCol);
 
 			// Find the last grapheme in the text before cursor
 			const graphemes = [...this.segment(beforeCursor, "grapheme")];
 			const lastGrapheme = graphemes[graphemes.length - 1];
 			const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
+			const isPastedSegmented = PASTE_MARKER_SINGLE.exec(lastGrapheme.segment);
+
+			if (isPastedSegmented) {
+				// This contains the id part e.g 4 from [paste #4 +123 lines]
+				const targetId = Number(isPastedSegmented[1]);
+				const before = line.slice(0, this.state.cursorCol - graphemeLength);
+				const after = line.slice(this.state.cursorCol);
+				this.state.lines[this.state.cursorLine] = before + after;
+				this.setCursorCol(this.state.cursorCol - graphemeLength);
+				const markerStillExists = this.state.lines.some((currentLine) =>
+					Array.from(currentLine.matchAll(PASTE_MARKER_REGEX)).some((match) => Number(match[1]) === targetId),
+				);
+				if (!markerStillExists) this.pastes.delete(targetId);
+				if (this.onChange) this.onChange(this.getText());
+				return;
+			}
+
+			line = this.state.lines[this.state.cursorLine] || "";
 
 			const before = line.slice(0, this.state.cursorCol - graphemeLength);
 			const after = line.slice(this.state.cursorCol);
@@ -1968,14 +1988,16 @@ export class Editor implements Component, Focusable {
 	}
 
 	private pushUndoSnapshot(): void {
-		this.undoStack.push(this.state);
+		this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
 	}
 
 	private undo(): void {
 		this.exitHistoryBrowsing();
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
-		Object.assign(this.state, snapshot);
+		Object.assign(this.state, snapshot.state);
+		this.pastes = snapshot.pastes;
+		this.pasteCounter = snapshot.pasteCounter;
 		this.lastAction = null;
 		this.preferredVisualCol = null;
 		if (this.onChange) {
