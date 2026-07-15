@@ -7,10 +7,10 @@ import {
 	type AnthropicMessagesCompat,
 	type Api,
 	type AssistantMessageEventStream,
+	type BuiltinProvider,
 	type Context,
 	getModels,
 	getProviders,
-	type KnownProvider,
 	type Model,
 	type OAuthProviderInterface,
 	type OpenAICompletionsCompat,
@@ -30,6 +30,7 @@ import { stripJsonComments } from "../utils/json.ts";
 import { normalizePath } from "../utils/paths.ts";
 import type { AuthStatus, AuthStorage } from "./auth-storage.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.ts";
+import { registerCustomRadiusOAuthProvider } from "./radius.ts";
 import {
 	clearConfigValueCache,
 	getConfigValueEnvVarNames,
@@ -134,13 +135,20 @@ const OpenAICompletionsCompatSchema = Type.Object({
 	openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
 	vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
 	supportsStrictMode: Type.Optional(Type.Boolean()),
+	sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+	sessionAffinityFormat: Type.Optional(
+		Type.Union([Type.Literal("openai"), Type.Literal("openai-nosession"), Type.Literal("openrouter")]),
+	),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
 	supportsDeveloperRole: Type.Optional(Type.Boolean()),
-	sendSessionIdHeader: Type.Optional(Type.Boolean()),
+	sessionAffinityFormat: Type.Optional(
+		Type.Union([Type.Literal("openai"), Type.Literal("openai-nosession"), Type.Literal("openrouter")]),
+	),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	supportsToolSearch: Type.Optional(Type.Boolean()),
 });
 
 const AnthropicMessagesCompatSchema = Type.Object({
@@ -149,6 +157,7 @@ const AnthropicMessagesCompatSchema = Type.Object({
 	sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
 	supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
 	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
+	supportsToolReferences: Type.Optional(Type.Boolean()),
 });
 
 const ProviderCompatSchema = Type.Union([
@@ -217,6 +226,9 @@ const ProviderConfigSchema = Type.Object({
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
 	apiKey: Type.Optional(Type.String({ minLength: 1 })),
 	api: Type.Optional(Type.String({ minLength: 1 })),
+	/** OAuth flavor spoken by this provider's endpoint. Registers a sign-in
+	 * provider with a dynamic model catalog (e.g. a custom Radius gateway). */
+	oauth: Type.Optional(Type.Literal("radius")),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
@@ -477,7 +489,7 @@ export class ModelRegistry {
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
 		return getProviders().flatMap((provider) => {
-			const models = getModels(provider as KnownProvider) as Model<Api>[];
+			const models = getModels(provider as BuiltinProvider) as Model<Api>[];
 			const providerOverride = overrides.get(provider);
 			const perModelOverrides = modelOverrides.get(provider);
 
@@ -570,6 +582,12 @@ export class ModelRegistry {
 					});
 				}
 
+				if (providerConfig.oauth === "radius") {
+					// Must run before the modifyModels loop in loadModels() so the
+					// credential-cached catalog is injected on this load.
+					registerCustomRadiusOAuthProvider(providerName, providerConfig.name, providerConfig.baseUrl!);
+				}
+
 				this.storeProviderRequestConfig(providerName, providerConfig);
 
 				if (providerConfig.modelOverrides) {
@@ -601,7 +619,11 @@ export class ModelRegistry {
 			const hasModelOverrides =
 				providerConfig.modelOverrides && Object.keys(providerConfig.modelOverrides).length > 0;
 
-			if (models.length === 0) {
+			if (providerConfig.oauth && !providerConfig.baseUrl) {
+				throw new Error(`Provider ${providerName}: "baseUrl" is required when "oauth" is set.`);
+			}
+
+			if (models.length === 0 && !providerConfig.oauth) {
 				// Override-only config: needs baseUrl, headers, compat, modelOverrides, or some combination.
 				if (!providerConfig.baseUrl && !providerConfig.headers && !providerConfig.compat && !hasModelOverrides) {
 					throw new Error(
@@ -647,7 +669,7 @@ export class ModelRegistry {
 		const getBuiltInDefaults = (providerName: string): { api: string; baseUrl: string } | undefined => {
 			if (!builtInProviders.has(providerName)) return undefined;
 			if (builtInDefaultsCache.has(providerName)) return builtInDefaultsCache.get(providerName);
-			const builtIn = getModels(providerName as KnownProvider) as Model<Api>[];
+			const builtIn = getModels(providerName as BuiltinProvider) as Model<Api>[];
 			if (builtIn.length === 0) return undefined;
 			const defaults = { api: builtIn[0].api, baseUrl: builtIn[0].baseUrl };
 			builtInDefaultsCache.set(providerName, defaults);
@@ -712,7 +734,7 @@ export class ModelRegistry {
 		const availability = await Promise.all(
 			allModels.map(async (model) => ({
 				model,
-				hasAuth: await this.hasConfiguredAuth(model),
+				hasAuth: await this.hasConfiguredAuthAsync(model),
 			})),
 		);
 		return availability.filter((entry) => entry.hasAuth).map((entry) => entry.model);
@@ -736,9 +758,17 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Check whether a model currently has resolvable auth.
+	 * Check whether a model has configured auth without refreshing async credentials.
+	 * Use hasConfiguredAuthAsync() when explicit Models auth must be resolved.
 	 */
-	async hasConfiguredAuth(model: Model<Api>): Promise<boolean> {
+	hasConfiguredAuth(model: Model<Api>): boolean {
+		return this.hasConfiguredAuthSync(model);
+	}
+
+	/**
+	 * Check whether a model currently has resolvable auth, including explicit Models auth.
+	 */
+	async hasConfiguredAuthAsync(model: Model<Api>): Promise<boolean> {
 		// #fork: explicit models
 		const explicitModel = this.getExplicitModel(model.provider, model.id);
 		if (explicitModel && this.explicitModels?.getProvider(model.provider)) {
