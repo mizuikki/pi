@@ -222,12 +222,20 @@ async function requestOAuthToken(
 		throw await readOAuthResponseError(response, "Radius OAuth token request failed");
 	}
 
-	const data = (await response.json()) as {
-		access_token: string;
-		refresh_token: string;
-		expires_in: number;
-		scope?: string;
-	};
+	const data: unknown = await response.json();
+	if (
+		!isRecord(data) ||
+		typeof data.access_token !== "string" ||
+		data.access_token.length === 0 ||
+		typeof data.refresh_token !== "string" ||
+		data.refresh_token.length === 0 ||
+		typeof data.expires_in !== "number" ||
+		!Number.isFinite(data.expires_in) ||
+		data.expires_in <= 0 ||
+		(data.scope !== undefined && typeof data.scope !== "string")
+	) {
+		throw new Error("Radius OAuth token response is missing or has invalid required fields");
+	}
 
 	return {
 		access: data.access_token,

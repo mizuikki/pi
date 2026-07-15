@@ -725,6 +725,9 @@ interface ProviderModelConfig {
     sessionAffinityFormat?: "openai" | "openai-nosession" | "openrouter";
     sendSessionAffinityHeaders?: boolean;
 
+    // openai-responses / openai-codex-responses
+    supportsToolSearch?: boolean; // Enables deferred tool loading through client-executed tool search.
+
     // anthropic-messages
     supportsEagerToolInputStreaming?: boolean;
     supportsLongCacheRetention?: boolean;

@@ -701,7 +701,10 @@ describe("openai-codex streaming", () => {
 		expect(requestedReasoning).toEqual({ effort: "xhigh", summary: "auto" });
 	});
 
-	it("forwards required tool choice", async () => {
+	it.each([
+		["required", "required"],
+		["named", { type: "function", name: "ping" }],
+	] as const)("forwards %s tool choice", async (_label, toolChoice) => {
 		const token = mockToken();
 		const encoder = new TextEncoder();
 		const sse = buildSSEPayload({ status: "completed" });
@@ -750,10 +753,10 @@ describe("openai-codex streaming", () => {
 					},
 				],
 			},
-			{ apiKey: token, transport: "sse", toolChoice: "required" },
+			{ apiKey: token, transport: "sse", toolChoice },
 		).result();
 
-		expect(requestedToolChoice).toBe("required");
+		expect(requestedToolChoice).toEqual(toolChoice);
 	});
 
 	it.each(["gpt-5.3-codex", "gpt-5.4", "gpt-5.5"])("clamps %s minimal reasoning effort to low", async (modelId) => {

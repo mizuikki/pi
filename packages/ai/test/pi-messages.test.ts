@@ -50,6 +50,10 @@ async function startServer(options: ResponderOptions): Promise<{ baseUrl: string
 			for (const [name, value] of Object.entries(options.headers ?? {})) {
 				response.setHeader(name, value);
 			}
+			if (options.rawBody !== undefined) {
+				response.end(options.rawBody);
+				return;
+			}
 			for (const event of options.events ?? []) {
 				response.write(`data: ${JSON.stringify(event)}\n\n`);
 			}
@@ -201,6 +205,19 @@ describe("pi-messages", () => {
 
 		expect(message.stopReason).toBe("error");
 		expect(message.errorMessage).toBe("Upstream failed");
+		expect(message.usage).toEqual(usage);
+	});
+
+	it("joins multiple data fields in one SSE event", async () => {
+		const serializedUsage = JSON.stringify(usage);
+		const { baseUrl } = await startServer({
+			rawBody: `data: {"type":"done",\ndata: "reason":"stop","usage":${serializedUsage}}\n\n`,
+		});
+		const model = createModel(baseUrl);
+
+		const message = await stream(model, context, { apiKey: "test-key" }).result();
+
+		expect(message.stopReason).toBe("stop");
 		expect(message.usage).toEqual(usage);
 	});
 

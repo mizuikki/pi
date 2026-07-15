@@ -306,9 +306,9 @@ async function* readPiMessagesEvents(stream: ReadableStream<Uint8Array>): AsyncG
 function parsePiMessagesEvent(raw: string): PiMessagesEvent | undefined {
 	const data = raw
 		.split("\n")
-		.find((line) => line.startsWith("data:"))
-		?.slice(5)
-		.trim();
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).replace(/^ /u, ""))
+		.join("\n");
 
 	return data && data !== "[DONE]" ? (JSON.parse(data) as PiMessagesEvent) : undefined;
 }

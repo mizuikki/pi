@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed clipboard text paste fallback on Linux and Termux when native clipboard access is unavailable.
+
 ## [0.80.7] - 2026-07-14
 
 ### Breaking Changes

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed named tool selection for OpenAI Codex Responses, multi-line SSE parsing for pi-messages, and malformed Radius OAuth token response handling.
+
 ## [0.80.7] - 2026-07-14
 
 ### Breaking Changes

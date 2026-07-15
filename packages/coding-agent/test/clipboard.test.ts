@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
 			getText: vi.fn<() => Promise<string>>(),
 			setText: vi.fn<(text: string) => Promise<void>>(),
 		},
+		execFileSync: vi.fn<(command: string, args: string[]) => string | Buffer>(),
 		execSync: vi.fn(),
 		spawn: vi.fn(),
 		platform: vi.fn<() => NodeJS.Platform>(),
@@ -24,6 +25,7 @@ vi.mock("../src/utils/clipboard-native.js", () => {
 
 vi.mock("child_process", () => {
 	return {
+		execFileSync: mocks.execFileSync,
 		execSync: mocks.execSync,
 		spawn: mocks.spawn,
 	};
@@ -62,6 +64,7 @@ beforeEach(() => {
 	nativeResolved = false;
 	mocks.clipboard.getText.mockReset();
 	mocks.clipboard.setText.mockReset();
+	mocks.execFileSync.mockReset();
 	mocks.execSync.mockReset();
 	mocks.spawn.mockReset();
 	mocks.platform.mockReset();
@@ -101,6 +104,36 @@ describe("readClipboardText", () => {
 
 		mocks.clipboard.getText.mockRejectedValue(new Error("clipboard unavailable"));
 		await expect(readClipboardText()).resolves.toBeNull();
+	});
+
+	test("falls back to Termux clipboard tools", async () => {
+		vi.stubEnv("TERMUX_VERSION", "1");
+		mocks.clipboard.getText.mockRejectedValue(new Error("native unavailable"));
+		mocks.execFileSync.mockReturnValue("termux text");
+
+		await expect(readClipboardText()).resolves.toBe("termux text");
+		expect(mocks.execFileSync).toHaveBeenCalledWith("termux-clipboard-get", [], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 5000,
+		});
+	});
+
+	test("falls back from Wayland to X11 clipboard tools", async () => {
+		mockedPlatform.mockReturnValue("linux");
+		vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+		vi.stubEnv("DISPLAY", ":0");
+		mocks.isWaylandSession.mockReturnValue(true);
+		mocks.clipboard.getText.mockRejectedValue(new Error("native unavailable"));
+		mocks.execFileSync.mockImplementation((command) => {
+			if (command === "xsel") return "x11 text";
+			throw new Error(`${command} unavailable`);
+		});
+
+		await expect(readClipboardText()).resolves.toBe("x11 text");
+		expect(mocks.execFileSync).toHaveBeenCalledWith("wl-paste", ["--no-newline"], expect.any(Object));
+		expect(mocks.execFileSync).toHaveBeenCalledWith("xclip", ["-selection", "clipboard", "-o"], expect.any(Object));
+		expect(mocks.execFileSync).toHaveBeenCalledWith("xsel", ["--clipboard", "--output"], expect.any(Object));
 	});
 });
 
