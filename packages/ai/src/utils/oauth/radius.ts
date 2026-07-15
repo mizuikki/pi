@@ -202,6 +202,7 @@ async function requestOAuthToken(
 	oauth: RadiusOAuthConfig,
 	body: URLSearchParams,
 	signal?: AbortSignal,
+	refreshTokenFallback?: string,
 ): Promise<OAuthCredentials> {
 	let response: Response;
 	try {
@@ -223,12 +224,18 @@ async function requestOAuthToken(
 	}
 
 	const data: unknown = await response.json();
+	const refreshToken =
+		isRecord(data) && typeof data.refresh_token === "string" && data.refresh_token.length > 0
+			? data.refresh_token
+			: isRecord(data) && data.refresh_token === undefined
+				? refreshTokenFallback
+				: undefined;
 	if (
 		!isRecord(data) ||
 		typeof data.access_token !== "string" ||
 		data.access_token.length === 0 ||
-		typeof data.refresh_token !== "string" ||
-		data.refresh_token.length === 0 ||
+		typeof refreshToken !== "string" ||
+		refreshToken.length === 0 ||
 		typeof data.expires_in !== "number" ||
 		!Number.isFinite(data.expires_in) ||
 		data.expires_in <= 0 ||
@@ -239,7 +246,7 @@ async function requestOAuthToken(
 
 	return {
 		access: data.access_token,
-		refresh: data.refresh_token,
+		refresh: refreshToken,
 		expires: Date.now() + data.expires_in * 1000 - TOKEN_EXPIRY_SKEW_MS,
 		scope: data.scope,
 	};
@@ -530,6 +537,8 @@ export function createRadiusOAuthProvider(options: RadiusOAuthProviderOptions): 
 					client_id: oauth.clientId,
 					refresh_token: credentials.refresh,
 				}),
+				undefined,
+				credentials.refresh,
 			);
 			return attachGatewayConfig(gateway, refreshed, credentials);
 		},

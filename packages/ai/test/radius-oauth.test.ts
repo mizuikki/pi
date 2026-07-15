@@ -20,7 +20,7 @@ afterEach(() => {
 describe("Radius OAuth", () => {
 	it.each([
 		["missing access token", { refresh_token: "refresh", expires_in: 3600 }],
-		["missing refresh token", { access_token: "access", expires_in: 3600 }],
+		["empty refresh token", { access_token: "access", refresh_token: "", expires_in: 3600 }],
 		["non-numeric expiry", { access_token: "access", refresh_token: "refresh", expires_in: "3600" }],
 		["non-positive expiry", { access_token: "access", refresh_token: "refresh", expires_in: 0 }],
 	] as const)("rejects a token response with %s", async (_label, tokenResponse) => {
@@ -46,5 +46,37 @@ describe("Radius OAuth", () => {
 		await expect(
 			provider.refreshToken({ access: "old-access", refresh: "old-refresh", expires: Date.now() }),
 		).rejects.toThrow("Radius OAuth token response is missing or has invalid required fields");
+	});
+
+	it("retains the previous refresh token when the refresh response does not rotate it", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL) => {
+				const url = input.toString();
+				if (url === "https://radius.example.com/v1/oauth") {
+					return Response.json(oauthConfig);
+				}
+				if (url === oauthConfig.tokenEndpoint) {
+					return Response.json({ access_token: "new-access", expires_in: 3600 });
+				}
+				if (url === "https://radius.example.com/v1/config") {
+					return Response.json({ baseUrl: "https://radius.example.com/v1", models: [] });
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			}),
+		);
+		const provider = createRadiusOAuthProvider({
+			id: "radius",
+			name: "Radius",
+			gateway: "https://radius.example.com",
+		});
+
+		const credentials = await provider.refreshToken({
+			access: "old-access",
+			refresh: "old-refresh",
+			expires: Date.now(),
+		});
+
+		expect(credentials).toMatchObject({ access: "new-access", refresh: "old-refresh" });
 	});
 });
