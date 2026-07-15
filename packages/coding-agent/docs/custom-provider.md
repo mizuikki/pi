@@ -722,6 +722,11 @@ interface ProviderModelConfig {
     thinkingFormat?: "openai" | "openrouter" | "deepseek" | "together" | "zai" | "qwen" | "chat-template" | "qwen-chat-template" | "string-thinking" | "ant-ling";
     chatTemplateKwargs?: Record<string, string | number | boolean | null | { "$var": "thinking.enabled" | "thinking.effort"; omitWhenOff?: boolean }>;
     cacheControlFormat?: "anthropic";
+    sessionAffinityFormat?: "openai" | "openai-nosession" | "openrouter";
+    sendSessionAffinityHeaders?: boolean;
+
+    // openai-responses / openai-codex-responses
+    supportsToolSearch?: boolean; // Enables deferred tool loading through client-executed tool search.
 
     // anthropic-messages
     supportsEagerToolInputStreaming?: boolean;

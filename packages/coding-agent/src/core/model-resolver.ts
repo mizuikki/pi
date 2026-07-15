@@ -18,6 +18,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	openai: "gpt-5.5",
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-5.5",
+	radius: "auto",
 	nvidia: "nvidia/nemotron-3-super-120b-a12b",
 	deepseek: "deepseek-v4-pro",
 	google: "gemini-3.1-pro-preview",
@@ -539,6 +540,11 @@ export interface InitialModelResult {
 	fallbackMessage: string | undefined;
 }
 
+async function hasConfiguredAuthForModel(modelRegistry: ModelRegistry, model: Model<Api>): Promise<boolean> {
+	const asyncCheck = modelRegistry.hasConfiguredAuthAsync;
+	return asyncCheck ? asyncCheck.call(modelRegistry, model) : modelRegistry.hasConfiguredAuth(model);
+}
+
 /**
  * Find the initial model to use based on priority:
  * 1. CLI args (provider + model)
@@ -599,7 +605,7 @@ export async function findInitialModel(options: {
 	// 3. Try saved default from settings if auth is configured.
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
-		if (found && (await modelRegistry.hasConfiguredAuth(found))) {
+		if (found && (await hasConfiguredAuthForModel(modelRegistry, found))) {
 			model = found;
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
@@ -642,7 +648,7 @@ export async function restoreModelFromSession(
 	const restoredModel = modelRegistry.find(savedProvider, savedModelId);
 
 	// Check if restored model exists and still has auth configured
-	const hasConfiguredAuth = restoredModel ? await modelRegistry.hasConfiguredAuth(restoredModel) : false;
+	const hasConfiguredAuth = restoredModel ? await hasConfiguredAuthForModel(modelRegistry, restoredModel) : false;
 
 	if (restoredModel && hasConfiguredAuth) {
 		if (shouldPrintMessages) {

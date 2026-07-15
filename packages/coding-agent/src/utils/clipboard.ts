@@ -1,4 +1,4 @@
-import { execSync, spawn } from "child_process";
+import { execFileSync, execSync, spawn } from "child_process";
 import { platform } from "os";
 import { isWaylandSession } from "./clipboard-image.ts";
 import { clipboard } from "./clipboard-native.ts";
@@ -18,6 +18,7 @@ function copyToX11Clipboard(options: NativeClipboardExecOptions): void {
 }
 
 const MAX_OSC52_ENCODED_LENGTH = 100_000;
+const CLIPBOARD_COMMAND_TIMEOUT_MS = 5000;
 
 function isRemoteSession(env: NodeJS.ProcessEnv = process.env): boolean {
 	return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.MOSH_CONNECTION);
@@ -30,6 +31,56 @@ function emitOsc52(text: string): boolean {
 	}
 	process.stdout.write(`\x1b]52;c;${encoded}\x07`);
 	return true;
+}
+
+function readClipboardCommand(command: string, args: string[]): string | null {
+	try {
+		const text = execFileSync(command, args, {
+			encoding: "utf8",
+			timeout: CLIPBOARD_COMMAND_TIMEOUT_MS,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		return text || null;
+	} catch {
+		return null;
+	}
+}
+
+function readClipboardTextWithPlatformTools(): string | null {
+	if (process.env.TERMUX_VERSION) {
+		const text = readClipboardCommand("termux-clipboard-get", []);
+		if (text) return text;
+	}
+
+	if (platform() !== "linux") return null;
+
+	if (isWaylandSession() && process.env.WAYLAND_DISPLAY) {
+		const text = readClipboardCommand("wl-paste", ["--no-newline"]);
+		if (text) return text;
+	}
+
+	if (process.env.DISPLAY) {
+		return (
+			readClipboardCommand("xclip", ["-selection", "clipboard", "-o"]) ??
+			readClipboardCommand("xsel", ["--clipboard", "--output"])
+		);
+	}
+
+	return null;
+}
+
+/** Read plain text from the system clipboard. */
+export async function readClipboardText(): Promise<string | null> {
+	if (clipboard) {
+		try {
+			const text = await clipboard.getText();
+			if (text) return text;
+		} catch {
+			// Fall through to platform-specific clipboard tools.
+		}
+	}
+
+	return readClipboardTextWithPlatformTools();
 }
 
 export async function copyToClipboard(text: string): Promise<void> {
@@ -61,7 +112,11 @@ export async function copyToClipboard(text: string): Promise<void> {
 		return;
 	}
 
-	const options: NativeClipboardExecOptions = { input: text, timeout: 5000, stdio: ["pipe", "ignore", "ignore"] };
+	const options: NativeClipboardExecOptions = {
+		input: text,
+		timeout: CLIPBOARD_COMMAND_TIMEOUT_MS,
+		stdio: ["pipe", "ignore", "ignore"],
+	};
 
 	if (!copied) {
 		try {

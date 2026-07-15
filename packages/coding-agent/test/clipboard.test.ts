@@ -1,13 +1,15 @@
 import { execSync, spawn } from "child_process";
 import { platform } from "os";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { copyToClipboard } from "../src/utils/clipboard.ts";
+import { copyToClipboard, readClipboardText } from "../src/utils/clipboard.ts";
 
 const mocks = vi.hoisted(() => {
 	return {
 		clipboard: {
+			getText: vi.fn<() => Promise<string>>(),
 			setText: vi.fn<(text: string) => Promise<void>>(),
 		},
+		execFileSync: vi.fn<(command: string, args: string[]) => string | Buffer>(),
 		execSync: vi.fn(),
 		spawn: vi.fn(),
 		platform: vi.fn<() => NodeJS.Platform>(),
@@ -23,6 +25,7 @@ vi.mock("../src/utils/clipboard-native.js", () => {
 
 vi.mock("child_process", () => {
 	return {
+		execFileSync: mocks.execFileSync,
 		execSync: mocks.execSync,
 		spawn: mocks.spawn,
 	};
@@ -59,13 +62,16 @@ beforeEach(() => {
 	vi.stubEnv("MOSH_CONNECTION", "");
 	stdoutWrites = [];
 	nativeResolved = false;
+	mocks.clipboard.getText.mockReset();
 	mocks.clipboard.setText.mockReset();
+	mocks.execFileSync.mockReset();
 	mocks.execSync.mockReset();
 	mocks.spawn.mockReset();
 	mocks.platform.mockReset();
 	mocks.isWaylandSession.mockReset();
 	mockedPlatform.mockReturnValue("darwin");
 	mocks.isWaylandSession.mockReturnValue(false);
+	mocks.clipboard.getText.mockResolvedValue("");
 	mocks.clipboard.setText.mockImplementation(async () => {
 		await new Promise((resolve) => setTimeout(resolve, 1));
 		nativeResolved = true;
@@ -84,6 +90,51 @@ beforeEach(() => {
 afterEach(() => {
 	process.stdout.write = originalWrite;
 	vi.unstubAllEnvs();
+});
+
+describe("readClipboardText", () => {
+	test("returns native clipboard text", async () => {
+		mocks.clipboard.getText.mockResolvedValue("clipboard text");
+
+		await expect(readClipboardText()).resolves.toBe("clipboard text");
+	});
+
+	test("returns null for empty or unavailable clipboard text", async () => {
+		await expect(readClipboardText()).resolves.toBeNull();
+
+		mocks.clipboard.getText.mockRejectedValue(new Error("clipboard unavailable"));
+		await expect(readClipboardText()).resolves.toBeNull();
+	});
+
+	test("falls back to Termux clipboard tools", async () => {
+		vi.stubEnv("TERMUX_VERSION", "1");
+		mocks.clipboard.getText.mockRejectedValue(new Error("native unavailable"));
+		mocks.execFileSync.mockReturnValue("termux text");
+
+		await expect(readClipboardText()).resolves.toBe("termux text");
+		expect(mocks.execFileSync).toHaveBeenCalledWith("termux-clipboard-get", [], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 5000,
+		});
+	});
+
+	test("falls back from Wayland to X11 clipboard tools", async () => {
+		mockedPlatform.mockReturnValue("linux");
+		vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+		vi.stubEnv("DISPLAY", ":0");
+		mocks.isWaylandSession.mockReturnValue(true);
+		mocks.clipboard.getText.mockRejectedValue(new Error("native unavailable"));
+		mocks.execFileSync.mockImplementation((command) => {
+			if (command === "xsel") return "x11 text";
+			throw new Error(`${command} unavailable`);
+		});
+
+		await expect(readClipboardText()).resolves.toBe("x11 text");
+		expect(mocks.execFileSync).toHaveBeenCalledWith("wl-paste", ["--no-newline"], expect.any(Object));
+		expect(mocks.execFileSync).toHaveBeenCalledWith("xclip", ["-selection", "clipboard", "-o"], expect.any(Object));
+		expect(mocks.execFileSync).toHaveBeenCalledWith("xsel", ["--clipboard", "--output"], expect.any(Object));
+	});
 });
 
 describe("copyToClipboard", () => {
