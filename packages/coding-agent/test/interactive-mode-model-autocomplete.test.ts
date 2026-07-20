@@ -6,9 +6,8 @@ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 type TestInteractiveMode = {
 	session: {
 		scopedModels: Array<{ model: Model<any> }>;
-		modelRegistry: {
+		modelRuntime: {
 			getAvailable: () => Promise<Model<any>[]>;
-			getAvailableSync: () => Model<any>[];
 		};
 		promptTemplates: [];
 		extensionRunner: { getRegisteredCommands: () => [] };
@@ -35,7 +34,6 @@ describe("InteractiveMode model autocomplete", () => {
 			maxTokens: 8192,
 		} satisfies Model<"faux">;
 		const getAvailable = vi.fn(async () => [explicitModel]);
-		const getAvailableSync = vi.fn(() => [] as Model<any>[]);
 		const createBaseAutocompleteProvider = (
 			InteractiveMode as unknown as {
 				prototype: { createBaseAutocompleteProvider(this: TestInteractiveMode): AutocompleteProvider };
@@ -44,9 +42,8 @@ describe("InteractiveMode model autocomplete", () => {
 		const fakeThis: TestInteractiveMode = {
 			session: {
 				scopedModels: [],
-				modelRegistry: {
+				modelRuntime: {
 					getAvailable,
-					getAvailableSync,
 				},
 				promptTemplates: [],
 				extensionRunner: { getRegisteredCommands: () => [] },
@@ -65,7 +62,6 @@ describe("InteractiveMode model autocomplete", () => {
 		});
 
 		expect(getAvailable).toHaveBeenCalledTimes(1);
-		expect(getAvailableSync).not.toHaveBeenCalled();
 		expect(suggestions?.items.map((item) => item.value)).toEqual(["explicit-faux/faux-1"]);
 	});
 });

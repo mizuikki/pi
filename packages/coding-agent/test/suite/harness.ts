@@ -1,3 +1,4 @@
+import { createInMemoryModelRegistry, getModelRuntime } from "../model-runtime-test-utils.ts";
 /**
  * Local test harness for the new coding-agent test suite.
  */
@@ -7,15 +8,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { FauxModelDefinition, FauxResponseStep, Model, Models } from "@earendil-works/pi-ai";
-import { createModels, createProvider } from "@earendil-works/pi-ai";
-import type { FauxProviderHandle } from "@earendil-works/pi-ai/providers/faux";
-import { createFauxCore, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import type {
+	FauxModelDefinition,
+	FauxProviderRegistration,
+	FauxResponseStep,
+	Model,
+} from "@earendil-works/pi-ai/compat";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
-import { ModelRegistry } from "../../src/core/model-registry.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
@@ -75,8 +78,7 @@ export interface Harness {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	authStorage: AuthStorage;
-	faux: FauxProviderHandle;
-	explicitModels: Models;
+	faux: FauxProviderRegistration;
 	models: [Model<string>, ...Model<string>[]];
 	getModel(): Model<string>;
 	getModel(modelId: string): Model<string> | undefined;
@@ -97,36 +99,13 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
-	const withConfiguredAuth = options.withConfiguredAuth ?? true;
-	const faux = withConfiguredAuth
-		? fauxProvider({
-				models: options.models,
-			})
-		: (() => {
-				const core = createFauxCore({ models: options.models });
-				const provider = createProvider({
-					id: core.provider,
-					name: core.provider,
-					auth: { apiKey: { name: "Faux", resolve: async () => undefined } },
-					models: core.models,
-					api: { stream: core.stream, streamSimple: core.streamSimple },
-				});
-				return {
-					provider,
-					api: core.api,
-					models: core.models,
-					getModel: core.getModel,
-					state: core.state,
-					setResponses: core.setResponses,
-					appendResponses: core.appendResponses,
-					getPendingResponseCount: core.getPendingResponseCount,
-				} satisfies FauxProviderHandle;
-			})();
-	faux.setResponses([]);
-	const explicitModels = createModels();
-	explicitModels.setProvider(faux.provider);
-	const model = faux.getModel();
+	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
+		models: options.models,
+	});
+	fauxProvider.setResponses([]);
+	const model = fauxProvider.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
+	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
 	const sessionManager = SessionManager.inMemory();
@@ -134,15 +113,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
 	const authStorage = AuthStorage.inMemory();
 	if (withConfiguredAuth) {
-		authStorage.setRuntimeApiKey(model.provider, "faux-key");
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "faux-key" }));
 	}
-	const modelRegistry = ModelRegistry.inMemory(authStorage, explicitModels);
+	const modelRegistry = await createInMemoryModelRegistry(authStorage);
 	if (withConfiguredAuth) {
 		modelRegistry.registerProvider(model.provider, {
 			baseUrl: model.baseUrl,
 			apiKey: "faux-key",
-			api: faux.api,
-			models: faux.models.map((registeredModel) => ({
+			api: fauxProvider.api,
+			models: fauxProvider.models.map((registeredModel) => ({
 				id: registeredModel.id,
 				name: registeredModel.name,
 				api: registeredModel.api,
@@ -163,8 +142,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			systemPrompt: options.systemPrompt ?? "You are a test assistant.",
 			tools: [],
 		},
-		streamFn: (requestModel, context, streamOptions) =>
-			explicitModels.streamSimple(requestModel, context, streamOptions),
 		convertToLlm,
 		onPayload: async (payload) => {
 			const runner = extensionRunnerRef.current;
@@ -201,8 +178,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		sessionManager,
 		settingsManager,
 		cwd: tempDir,
-		modelRegistry,
-		models: explicitModels,
+		modelRuntime: getModelRuntime(modelRegistry),
 		resourceLoader,
 		baseToolsOverride: toolMap,
 		initialActiveToolNames: options.initialActiveToolNames,
@@ -221,13 +197,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		sessionManager,
 		settingsManager,
 		authStorage,
-		faux,
-		explicitModels,
-		models: faux.models,
-		getModel: faux.getModel,
-		setResponses: faux.setResponses,
-		appendResponses: faux.appendResponses,
-		getPendingResponseCount: faux.getPendingResponseCount,
+		faux: fauxProvider,
+		models: fauxProvider.models,
+		getModel: fauxProvider.getModel,
+		setResponses: fauxProvider.setResponses,
+		appendResponses: fauxProvider.appendResponses,
+		getPendingResponseCount: fauxProvider.getPendingResponseCount,
 		events,
 		eventsOfType<T extends AgentSessionEvent["type"]>(type: T) {
 			return events.filter((event): event is Extract<AgentSessionEvent, { type: T }> => event.type === type);
@@ -235,6 +210,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		tempDir,
 		cleanup() {
 			session.dispose();
+			fauxProvider.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true });
 			}

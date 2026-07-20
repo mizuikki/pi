@@ -21,6 +21,7 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { API_KEY } from "./utilities.ts";
 
@@ -48,11 +49,16 @@ describe.skipIf(!API_KEY)("AgentSession forking", () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		sessionManager = noSession ? SessionManager.inMemory(tempDir) : SessionManager.create(tempDir);
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
-		authStorage.setRuntimeApiKey("anthropic", API_KEY!);
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: API_KEY! }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(tempDir, "models.json"),
+			allowModelNetwork: false,
+		});
 
 		const servicesOptions = {
 			agentDir: tempDir,
-			authStorage,
+			modelRuntime,
 			resourceLoaderOptions: {
 				noExtensions: true,
 				noSkills: true,

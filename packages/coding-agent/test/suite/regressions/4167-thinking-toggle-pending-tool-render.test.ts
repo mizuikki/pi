@@ -44,7 +44,7 @@ type RenderSessionContextThis = {
 		getShowCacheMissNotices(): boolean;
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
-	session: { retryAttempt: number; modelRegistry: { find(provider: string, modelId: string): undefined } };
+	session: { retryAttempt: number; modelRuntime: { getModel(provider: string, modelId: string): undefined } };
 	toolOutputExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
@@ -74,7 +74,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 			getShowCacheMissNotices: () => false,
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
-		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },
+		session: { retryAttempt: 0, modelRuntime: { getModel: () => undefined } },
 		toolOutputExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),

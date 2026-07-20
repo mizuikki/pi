@@ -5,6 +5,7 @@ import { getModel } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import type { ExtensionFactory } from "../src/core/sdk.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -31,7 +32,11 @@ describe("AgentSession dynamic provider registration", () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(agentDir, "models.json"),
+		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir,
@@ -46,7 +51,7 @@ describe("AgentSession dynamic provider registration", () => {
 			model: getModel("anthropic", "claude-sonnet-4-5")!,
 			settingsManager,
 			sessionManager,
-			authStorage,
+			modelRuntime,
 			resourceLoader,
 		});
 
@@ -57,11 +62,16 @@ describe("AgentSession dynamic provider registration", () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(agentDir, "models.json"),
+			allowModelNetwork: false,
+		});
 		const services = await createAgentSessionServices({
 			cwd: tempDir,
 			agentDir,
-			authStorage,
+			modelRuntime,
 			settingsManager,
 			resourceLoaderOptions: {
 				extensionFactories,
@@ -70,7 +80,7 @@ describe("AgentSession dynamic provider registration", () => {
 		const { session } = await createAgentSessionFromServices({
 			services,
 			sessionManager,
-			model: services.modelRegistry.find("anthropic", "claude-sonnet-4-5")!,
+			model: services.modelRuntime.getModel("anthropic", "claude-sonnet-4-5")!,
 		});
 		return session;
 	}
@@ -182,7 +192,7 @@ describe("AgentSession dynamic provider registration", () => {
 		]);
 
 		await session.bindExtensions({});
-		const thinkingModel = session.modelRegistry.find("thinking-provider", "thinking-model");
+		const thinkingModel = session.modelRuntime.getModel("thinking-provider", "thinking-model");
 		expect(thinkingModel).toBeDefined();
 		await session.setModel(thinkingModel!);
 		session.setThinkingLevel("high");
@@ -268,7 +278,7 @@ describe("AgentSession dynamic provider registration", () => {
 		]);
 
 		await session.bindExtensions({ onError: () => {} });
-		const reloadModel = session.modelRegistry.find("reload-provider", "reload-model");
+		const reloadModel = session.modelRuntime.getModel("reload-provider", "reload-model");
 		expect(reloadModel).toBeDefined();
 		await session.setModel(reloadModel!);
 
