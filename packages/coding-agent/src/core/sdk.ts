@@ -1,23 +1,20 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Models } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { clampThinkingLevel, type Message, type Model } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
-import { AuthStorage } from "./auth-storage.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
-import { ModelRegistry } from "./model-registry.ts";
 import { findInitialModel } from "./model-resolver.ts";
+import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
-import { markSdkDefaultStreamFn } from "./stream-fn-tags.ts";
 import { time } from "./timings.ts";
 import {
 	createBashTool,
@@ -39,16 +36,11 @@ export interface CreateAgentSessionOptions {
 	/** Global config directory. Default: ~/.pi/agent */
 	agentDir?: string;
 
-	/** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
-	authStorage?: AuthStorage;
-	/** Model registry. Default: ModelRegistry.create(authStorage, agentDir/models.json) */
-	modelRegistry?: ModelRegistry;
+	/** Canonical model/auth runtime. Defaults to a runtime using agentDir/auth.json and models.json. */
+	modelRuntime?: ModelRuntime;
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model<any>;
-	// #fork: explicit models
-	/** Explicit Models collection. When provided, session model resolution and requests prefer it. */
-	models?: Models;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -174,19 +166,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
 	let resourceLoader = options.resourceLoader;
 
-	// Use provided or create AuthStorage and ModelRegistry
 	const authPath = options.agentDir ? join(agentDir, "auth.json") : undefined;
 	const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-	const authStorage = options.authStorage ?? AuthStorage.create(authPath);
-	// #fork: explicit models
-	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath, options.models);
-	if (options.models !== undefined) {
-		modelRegistry.setExplicitModels(options.models);
-	}
+	const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create({ authPath, modelsPath }));
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
-	const explicitModels = options.models ?? modelRegistry.getExplicitModelsSource();
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -204,8 +189,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && existingSession.model) {
-		const restoredModel = modelRegistry.find(existingSession.model.provider, existingSession.model.modelId);
-		if (restoredModel && (await modelRegistry.hasConfiguredAuthAsync(restoredModel))) {
+		const restoredModel = modelRuntime.getModel(existingSession.model.provider, existingSession.model.modelId);
+		if (restoredModel && modelRuntime.hasConfiguredAuth(restoredModel.provider)) {
 			model = restoredModel;
 		}
 		if (!model) {
@@ -221,7 +206,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			defaultProvider: settingsManager.getDefaultProvider(),
 			defaultModelId: settingsManager.getDefaultModel(),
 			defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
-			modelRegistry,
+			modelRuntime,
 		});
 		model = result.model;
 		if (!model) {
@@ -301,72 +286,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
-	const defaultStreamFn: StreamFn = markSdkDefaultStreamFn(async (model, context, options) => {
-		// #fork: explicit models
-		if (explicitModels?.getProvider(model.provider)) {
-			const providerRetrySettings = settingsManager.getProviderRetrySettings();
-			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
-			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
-			const websocketConnectTimeoutMs =
-				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
-			let headers = mergeProviderAttributionHeaders(
-				model,
-				settingsManager,
-				options?.sessionId,
-				undefined,
-				options?.headers,
-			);
-			// Let extensions inject/adjust per-request headers (e.g. tracing, session correlation)
-			// after static assembly, before the provider HTTP call.
-			const headerRunner = extensionRunnerRef.current;
-			if (headerRunner?.hasHandlers("before_provider_headers")) {
-				headers = await headerRunner.emitBeforeProviderHeaders(headers ?? {});
-			}
-			return explicitModels.streamSimple(model, context, {
-				...options,
-				timeoutMs,
-				websocketConnectTimeoutMs,
-				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
-				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				headers,
-			});
-		}
-
-		const auth = await modelRegistry.getApiKeyAndHeaders(model);
-		if (!auth.ok) {
-			throw new Error(auth.error);
-		}
-		const env = auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
-		const providerRetrySettings = settingsManager.getProviderRetrySettings();
-		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
-		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-		const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
-		const websocketConnectTimeoutMs =
-			options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
-		let headers = mergeProviderAttributionHeaders(
-			model,
-			settingsManager,
-			options?.sessionId,
-			auth.headers,
-			options?.headers,
-		);
-		const headerRunner = extensionRunnerRef.current;
-		if (headerRunner?.hasHandlers("before_provider_headers")) {
-			headers = await headerRunner.emitBeforeProviderHeaders(headers ?? {});
-		}
-		return streamSimple(model, context, {
-			...options,
-			apiKey: auth.apiKey,
-			env,
-			timeoutMs,
-			websocketConnectTimeoutMs,
-			maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
-			maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-			headers,
-		});
-	});
-
 	agent = new Agent({
 		initialState: {
 			systemPrompt: "",
@@ -375,7 +294,35 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: [],
 		},
 		convertToLlm: convertToLlmWithBlockImages,
-		streamFn: defaultStreamFn,
+		streamFn: async (model, context, options) => {
+			const providerRetrySettings = settingsManager.getProviderRetrySettings();
+			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
+			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
+			// Use max int32 to effectively disable the timeout.
+			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
+			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
+			const websocketConnectTimeoutMs =
+				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
+			const headerRunner = extensionRunnerRef.current;
+			return modelRuntime.streamSimple(model, context, {
+				...options,
+				timeoutMs,
+				websocketConnectTimeoutMs,
+				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
+				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				transformHeaders: async (requestHeaders) => {
+					const headers = mergeProviderAttributionHeaders(
+						model,
+						settingsManager,
+						options?.sessionId,
+						requestHeaders,
+					);
+					return headerRunner?.hasHandlers("before_provider_headers")
+						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+						: (headers ?? {});
+				},
+			});
+		},
 		onPayload: async (payload, _model) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
@@ -429,8 +376,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		scopedModels: options.scopedModels,
 		resourceLoader,
 		customTools: options.customTools,
-		modelRegistry,
-		models: options.models,
+		modelRuntime,
 		initialActiveToolNames,
 		allowedToolNames,
 		excludedToolNames,

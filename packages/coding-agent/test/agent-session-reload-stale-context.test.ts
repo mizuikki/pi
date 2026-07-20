@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import type { ExtensionFactory } from "../src/core/sdk.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -30,7 +31,12 @@ describe("AgentSession reload stale extension contexts", () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		await authStorage.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(agentDir, "models.json"),
+			allowModelNetwork: false,
+		});
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: tempDir,
 			agentDir,
@@ -45,7 +51,7 @@ describe("AgentSession reload stale extension contexts", () => {
 			model: getModel("anthropic", "claude-sonnet-4-5")!,
 			settingsManager,
 			sessionManager,
-			authStorage,
+			modelRuntime,
 			resourceLoader,
 		});
 

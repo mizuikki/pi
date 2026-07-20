@@ -1,11 +1,10 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model, Models } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { AuthStorage } from "./auth-storage.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
-import { ModelRegistry } from "./model-registry.ts";
+import { ModelRuntime } from "./model-runtime.ts";
 import {
 	DefaultResourceLoader,
 	type DefaultResourceLoaderOptions,
@@ -38,11 +37,8 @@ export interface AgentSessionRuntimeDiagnostic {
 export interface CreateAgentSessionServicesOptions {
 	cwd: string;
 	agentDir?: string;
-	authStorage?: AuthStorage;
 	settingsManager?: SettingsManager;
-	modelRegistry?: ModelRegistry;
-	// #fork: explicit models
-	models?: Models;
+	modelRuntime?: ModelRuntime;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 	resourceLoaderReloadOptions?: ResourceLoaderReloadOptions;
@@ -59,8 +55,6 @@ export interface CreateAgentSessionFromServicesOptions {
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
 	model?: Model<any>;
-	// #fork: explicit models
-	models?: Models;
 	thinkingLevel?: ThinkingLevel;
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	tools?: string[];
@@ -78,11 +72,8 @@ export interface CreateAgentSessionFromServicesOptions {
 export interface AgentSessionServices {
 	cwd: string;
 	agentDir: string;
-	authStorage: AuthStorage;
+	modelRuntime: ModelRuntime;
 	settingsManager: SettingsManager;
-	modelRegistry: ModelRegistry;
-	// #fork: explicit models
-	models?: Models;
 	resourceLoader: ResourceLoader;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
@@ -145,15 +136,13 @@ export async function createAgentSessionServices(
 ): Promise<AgentSessionServices> {
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
-	const authStorage = options.authStorage ?? AuthStorage.create(join(agentDir, "auth.json"));
+	const modelRuntime =
+		options.modelRuntime ??
+		(await ModelRuntime.create({
+			authPath: join(agentDir, "auth.json"),
+			modelsPath: join(agentDir, "models.json"),
+		}));
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-	const modelRegistry =
-		options.modelRegistry ?? ModelRegistry.create(authStorage, join(agentDir, "models.json"), options.models);
-	if (options.models !== undefined) {
-		// #fork: explicit models
-		modelRegistry.setExplicitModels(options.models);
-	}
-	const explicitModels = options.models ?? modelRegistry.getExplicitModelsSource();
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
 		cwd,
@@ -166,7 +155,7 @@ export async function createAgentSessionServices(
 	const extensionsResult = resourceLoader.getExtensions();
 	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
 		try {
-			modelRegistry.registerProvider(name, config, extensionPath);
+			modelRuntime.registerProvider(name, config, extensionPath);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			diagnostics.push({
@@ -176,16 +165,14 @@ export async function createAgentSessionServices(
 		}
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
+	await modelRuntime.refresh({ allowNetwork: false });
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
 	return {
 		cwd,
 		agentDir,
-		authStorage,
+		modelRuntime,
 		settingsManager,
-		modelRegistry,
-		// #fork: explicit models
-		models: explicitModels,
 		resourceLoader,
 		diagnostics,
 	};
@@ -204,14 +191,11 @@ export async function createAgentSessionFromServices(
 	return createAgentSession({
 		cwd: options.services.cwd,
 		agentDir: options.services.agentDir,
-		authStorage: options.services.authStorage,
+		modelRuntime: options.services.modelRuntime,
 		settingsManager: options.services.settingsManager,
-		modelRegistry: options.services.modelRegistry,
 		resourceLoader: options.services.resourceLoader,
 		sessionManager: options.sessionManager,
 		model: options.model,
-		// #fork: explicit models
-		models: options.models ?? options.services.models,
 		thinkingLevel: options.thinkingLevel,
 		scopedModels: options.scopedModels,
 		tools: options.tools,

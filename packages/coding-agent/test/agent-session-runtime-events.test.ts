@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +11,7 @@ import {
 	createAgentSessionServices,
 } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import type {
 	ExtensionFactory,
@@ -40,16 +41,36 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		mkdirSync(tempDir, { recursive: true });
 
 		const faux = fauxProvider();
-		const models = createModels();
-		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
-		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(tempDir, "models.json"),
+		});
+		const model = faux.getModel();
+		modelRuntime.registerProvider(model.provider, {
+			baseUrl: model.baseUrl,
+			api: model.api,
+			models: [
+				{
+					id: model.id,
+					name: model.name,
+					api: model.api,
+					reasoning: model.reasoning,
+					input: model.input,
+					cost: model.cost,
+					contextWindow: model.contextWindow,
+					maxTokens: model.maxTokens,
+					baseUrl: model.baseUrl,
+				},
+			],
+		});
 
 		const runtimeOptions = {
 			agentDir: tempDir,
-			authStorage,
+			modelRuntime,
 			model: faux.getModel(),
 			resourceLoaderOptions: {
 				extensionFactories: [extensionFactory],
@@ -62,7 +83,6 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
-				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -70,7 +90,6 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: faux.getModel(),
-					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,

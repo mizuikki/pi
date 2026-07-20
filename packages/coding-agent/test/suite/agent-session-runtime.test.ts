@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
-import { createModels, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +11,7 @@ import {
 	createAgentSessionServices,
 } from "../../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
+import { ModelRuntime } from "../../src/core/model-runtime.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type {
 	ExtensionAPI,
@@ -50,16 +51,19 @@ describe("AgentSessionRuntime characterization", () => {
 				{ id: "faux-2", reasoning: false },
 			],
 		});
-		const models = createModels();
-		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
-		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(tempDir, "models.json"),
+			allowModelNetwork: false,
+		});
 
 		const runtimeOptions = {
 			agentDir: tempDir,
-			authStorage,
+			modelRuntime,
 			model: options?.bootstrapModel === false ? undefined : faux.getModel(),
 			thinkingLevel: options?.bootstrapThinkingLevel === false ? undefined : undefined,
 			resourceLoaderOptions: {
@@ -92,7 +96,6 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
-				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -100,7 +103,6 @@ describe("AgentSessionRuntime characterization", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: runtimeOptions.model,
-					models,
 					thinkingLevel: runtimeOptions.thinkingLevel,
 				})),
 				services,
@@ -294,6 +296,19 @@ describe("AgentSessionRuntime characterization", () => {
 		expect(events).toEqual([{ type: "session_before_fork", entryId: "missing-entry", position: "at" }]);
 	});
 
+	it("reports why an unflushed session cannot be forked", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		const sessionFile = runtime.session.sessionFile;
+		const leafId = runtime.session.sessionManager.getLeafId();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(false);
+		expect(leafId).toBeTruthy();
+
+		await expect(runtime.fork(leafId!, { position: "at" })).rejects.toThrow(
+			"This session has not been saved yet. Wait for the first assistant response before cloning or forking it.",
+		);
+	});
+
 	it("duplicates the current active branch when forking at the current position", async () => {
 		const { runtime } = await createRuntimeForTest(() => {});
 		await runtime.session.prompt("hello");
@@ -344,16 +359,19 @@ describe("AgentSessionRuntime characterization", () => {
 				{ id: "faux-2", reasoning: false },
 			],
 		});
-		const models = createModels();
-		models.setProvider(faux.provider);
 		faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two"), fauxAssistantMessage("three")]);
 
 		const authStorage = AuthStorage.inMemory();
-		authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+		await authStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage,
+			modelsPath: join(tempDir, "models.json"),
+			allowModelNetwork: false,
+		});
 
 		const runtimeOptions = {
 			agentDir: tempDir,
-			authStorage,
+			modelRuntime,
 			model: faux.getModel(),
 			resourceLoaderOptions: {
 				extensionFactories: [
@@ -384,7 +402,6 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...runtimeOptions,
 				cwd,
-				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
@@ -392,7 +409,6 @@ describe("AgentSessionRuntime characterization", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: runtimeOptions.model,
-					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -460,13 +476,16 @@ describe("AgentSessionRuntime characterization", () => {
 		mkdirSync(firstDir, { recursive: true });
 		mkdirSync(secondDir, { recursive: true });
 		const { runtime, faux, tempDir } = await createRuntimeForTest(() => {}, { cwd: firstDir });
-		const models = createModels();
-		models.setProvider(faux.provider);
 		const otherAuthStorage = AuthStorage.inMemory();
-		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+		await otherAuthStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const otherModelRuntime = await ModelRuntime.create({
+			credentials: otherAuthStorage,
+			modelsPath: join(tempDir, "models.json"),
+			allowModelNetwork: false,
+		});
 		const otherRuntimeOptions = {
 			agentDir: tempDir,
-			authStorage: otherAuthStorage,
+			modelRuntime: otherModelRuntime,
 			resourceLoaderOptions: {
 				extensionFactories: [
 					(pi: ExtensionAPI) => {
@@ -500,14 +519,12 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...otherRuntimeOptions,
 				cwd,
-				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
 					services,
 					sessionManager,
 					sessionStartEvent,
-					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -535,15 +552,18 @@ describe("AgentSessionRuntime characterization", () => {
 			bootstrapModel: false,
 			bootstrapThinkingLevel: false,
 		});
-		const models = createModels();
-		models.setProvider(faux.provider);
 		const otherDir = join(tempDir, "other");
 		mkdirSync(otherDir, { recursive: true });
 		const otherAuthStorage = AuthStorage.inMemory();
-		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+		await otherAuthStorage.modify(faux.getModel().provider, async () => ({ type: "api_key", key: "faux-key" }));
+		const otherModelRuntime = await ModelRuntime.create({
+			credentials: otherAuthStorage,
+			modelsPath: join(tempDir, "models.json"),
+			allowModelNetwork: false,
+		});
 		const otherRuntimeOptions = {
 			agentDir: tempDir,
-			authStorage: otherAuthStorage,
+			modelRuntime: otherModelRuntime,
 			resourceLoaderOptions: {
 				extensionFactories: [
 					(pi: ExtensionAPI) => {
@@ -577,14 +597,12 @@ describe("AgentSessionRuntime characterization", () => {
 			const services = await createAgentSessionServices({
 				...otherRuntimeOptions,
 				cwd,
-				models,
 			});
 			return {
 				...(await createAgentSessionFromServices({
 					services,
 					sessionManager,
 					sessionStartEvent,
-					models,
 				})),
 				services,
 				diagnostics: services.diagnostics,
