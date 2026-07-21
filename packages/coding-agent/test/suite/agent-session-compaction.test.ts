@@ -128,6 +128,42 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
 	});
 
+	it("emits the newly appended manual compaction when summaries repeat", async () => {
+		const emittedCompactionIds: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "repeated summary",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+					pi.on("session_compact", async (event) => {
+						emittedCompactionIds.push(event.compactionEntry.id);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+
+		await harness.session.prompt("one");
+		await harness.session.prompt("two");
+		await harness.session.compact();
+		await harness.session.prompt("three");
+		await harness.session.prompt("four");
+		await harness.session.compact();
+
+		const compactionIds = harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "compaction")
+			.map((entry) => entry.id);
+		expect(compactionIds).toHaveLength(2);
+		expect(emittedCompactionIds).toEqual(compactionIds);
+	});
+
 	it("throws when compacting without a model", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
@@ -171,6 +207,40 @@ describe("AgentSession compaction characterization", () => {
 		expect(compactionEntries).toHaveLength(1);
 		expect(compactionEnd?.result?.estimatedTokensAfter).toBeGreaterThan(0);
 		expect(getStreamCallCount()).toBe(1);
+	});
+
+	it("emits the newly appended automatic compaction when summaries repeat", async () => {
+		const emittedCompactionIds: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "repeated summary",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+					pi.on("session_compact", async (event) => {
+						emittedCompactionIds.push(event.compactionEntry.id);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		seedCompactableSession(harness);
+		await sessionInternals._runAutoCompaction("threshold", false);
+		seedCompactableSession(harness);
+		await sessionInternals._runAutoCompaction("threshold", false);
+
+		const compactionIds = harness.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "compaction")
+			.map((entry) => entry.id);
+		expect(compactionIds).toHaveLength(2);
+		expect(emittedCompactionIds).toEqual(compactionIds);
 	});
 
 	it("cancels in-progress manual compaction when abortCompaction is called", async () => {
