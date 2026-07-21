@@ -6,6 +6,10 @@
 
 - Removed the fork-only explicit `Models` session SDK surface (`CreateAgentSessionOptions.models`, `modelRegistry`, `ModelRegistry.create()`/`inMemory()`, `getAvailableSync()`, and related helpers). Use `ModelRuntime` as the sole execution architecture; extensions continue to use the synchronous `ModelRegistry` facade.
 
+### Added
+
+- Added trusted session attribution and request-origin metadata to `before_provider_request`, including manual/automatic compaction, turn-prefix, and branch-summary provider calls.
+
 ### Fixed
 
 - Fixed clipboard text paste fallback on Linux and Termux when native clipboard access is unavailable.

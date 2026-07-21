@@ -22,6 +22,7 @@ import type {
 	AgentState,
 	AgentTool,
 	PrepareNextTurnContext,
+	StreamFn,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type {
@@ -73,6 +74,7 @@ import {
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
+	type ProviderRequestOrigin,
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
@@ -438,6 +440,27 @@ export class AgentSession {
 		} catch {
 			return {};
 		}
+	}
+
+	private _getAuxiliaryStreamFn(origin: Exclude<ProviderRequestOrigin, "agent">): StreamFn {
+		const sessionId = this.sessionManager.getSessionId();
+		if (!sessionId.trim()) {
+			throw new Error("Cannot issue a provider request without an active session ID");
+		}
+		const streamFn = this.agent.streamFn;
+
+		return (model, context, options) =>
+			streamFn(model, context, {
+				...options,
+				sessionId,
+				onPayload: async (payload) => {
+					const runner = this._extensionRunner;
+					if (!runner.hasHandlers("before_provider_request")) {
+						return payload;
+					}
+					return runner.emitBeforeProviderRequest(payload, origin, options?.signal);
+				},
+			});
 	}
 
 	/**
@@ -1873,7 +1896,7 @@ export class AgentSession {
 					customInstructions,
 					this._compactionAbortController.signal,
 					this.thinkingLevel,
-					this.agent.streamFn,
+					this._getAuxiliaryStreamFn("compaction_summary"),
 					env,
 				);
 				summary = result.summary;
@@ -2134,7 +2157,7 @@ export class AgentSession {
 					undefined,
 					this._autoCompactionAbortController.signal,
 					this.thinkingLevel,
-					this.agent.streamFn,
+					this._getAuxiliaryStreamFn("compaction_summary"),
 					env,
 				);
 				summary = compactResult.summary;
@@ -2994,7 +3017,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFn,
+					streamFn: this._getAuxiliaryStreamFn("branch_summary"),
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };

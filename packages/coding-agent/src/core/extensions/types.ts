@@ -659,10 +659,17 @@ export interface ContextEvent {
 	messages: AgentMessage[];
 }
 
+/** Trusted origin of a provider request issued by the active Pi session. */
+export type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
+
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
 	payload: unknown;
+	/** Session attribution sourced from the active SessionManager. */
+	sessionId: string;
+	/** Pi-owned request origin. Extensions must not infer this from payload content. */
+	origin: ProviderRequestOrigin;
 }
 
 /**
