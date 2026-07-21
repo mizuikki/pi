@@ -453,12 +453,13 @@ export class AgentSession {
 			streamFn(model, context, {
 				...options,
 				sessionId,
-				onPayload: async (payload) => {
+				onPayload: async (payload, model) => {
+					const transformedPayload = (await options?.onPayload?.(payload, model)) ?? payload;
 					const runner = this._extensionRunner;
 					if (!runner.hasHandlers("before_provider_request")) {
-						return payload;
+						return transformedPayload;
 					}
-					return runner.emitBeforeProviderRequest(payload, origin, options?.signal);
+					return runner.emitBeforeProviderRequest(transformedPayload, origin, options?.signal);
 				},
 			});
 	}

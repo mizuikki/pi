@@ -132,6 +132,35 @@ describe("provider request attribution", () => {
 		]);
 	});
 
+	it("preserves caller payload transforms for auxiliary requests", async () => {
+		const requests: RecordedRequest[] = [];
+		const harness = await createHarness({ extensionFactories: [recordingExtension(requests)] });
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const streamFn = sessionInternals._getAuxiliaryStreamFn("compaction_summary");
+		const controller = new AbortController();
+		harness.setResponses([
+			async (_context, options, _state, model) => {
+				const payload = { stage: "initial" };
+				expect(await options?.onPayload?.(payload, model)).toEqual({ stage: "caller" });
+				return fauxAssistantMessage("summary");
+			},
+		]);
+
+		await (
+			await streamFn(
+				harness.getModel(),
+				{ systemPrompt: "", messages: [] },
+				{
+					signal: controller.signal,
+					onPayload: () => ({ stage: "caller" }),
+				},
+			)
+		).result();
+
+		expect(requests).toEqual([{ origin: "compaction_summary", sessionId: harness.sessionManager.getSessionId() }]);
+	});
+
 	it("attributes branch summaries to the SessionManager session", async () => {
 		const requests: RecordedRequest[] = [];
 		const harness = await createHarness({ extensionFactories: [recordingExtension(requests)] });
