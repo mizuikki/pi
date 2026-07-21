@@ -1629,7 +1629,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			const kimiModels = data["kimi-for-coding"].models as Record<string, ModelsDevModel>;
 			const hasCanonicalModel = Object.prototype.hasOwnProperty.call(kimiModels, "kimi-for-coding");
 
-			const kimiAliases = new Set(["k2p5", "k2p6"]);
+			const kimiAliases = new Set(["k2p5", "k2p6", "k2p7"]);
 
 			for (const [modelId, model] of Object.entries(kimiModels)) {
 				const m = model as ModelsDevModel;

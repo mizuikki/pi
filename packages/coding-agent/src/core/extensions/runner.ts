@@ -45,6 +45,7 @@ import type {
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
 	ProviderConfig,
+	ProviderRequestOrigin,
 	RegisteredCommand,
 	RegisteredTool,
 	ReplacedSessionContext,
@@ -637,7 +638,7 @@ export class ExtensionRunner {
 	 * Create an ExtensionContext for use in event handlers and tool execution.
 	 * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
 	 */
-	createContext(): ExtensionContext {
+	createContext(signalOverride?: AbortSignal): ExtensionContext {
 		const runner = this;
 		const getModel = this.getModel;
 		return {
@@ -679,7 +680,7 @@ export class ExtensionRunner {
 			},
 			get signal() {
 				runner.assertActive();
-				return runner.getSignalFn();
+				return signalOverride ?? runner.getSignalFn();
 			},
 			abort: () => {
 				runner.assertActive();
@@ -966,9 +967,17 @@ export class ExtensionRunner {
 		return currentMessages;
 	}
 
-	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
-		const ctx = this.createContext();
+	async emitBeforeProviderRequest(
+		payload: unknown,
+		origin: ProviderRequestOrigin = "agent",
+		signal?: AbortSignal,
+	): Promise<unknown> {
+		const ctx = this.createContext(signal);
 		let currentPayload = payload;
+		const sessionId = this.sessionManager.getSessionId();
+		if (!sessionId.trim()) {
+			throw new Error("Cannot issue a provider request without an active session ID");
+		}
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("before_provider_request");
@@ -979,6 +988,8 @@ export class ExtensionRunner {
 					const event: BeforeProviderRequestEvent = {
 						type: "before_provider_request",
 						payload: currentPayload,
+						sessionId,
+						origin,
 					};
 					const handlerResult = await handler(event, ctx);
 					if (handlerResult !== undefined) {

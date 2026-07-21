@@ -148,7 +148,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			if (!runner?.hasHandlers("before_provider_request")) {
 				return payload;
 			}
-			return runner.emitBeforeProviderRequest(payload);
+			return runner.emitBeforeProviderRequest(payload, "agent");
 		},
 		onResponse: async (response) => {
 			const runner = extensionRunnerRef.current;
@@ -166,6 +166,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			if (!runner) return messages;
 			return runner.emitContext(messages);
 		},
+		sessionId: sessionManager.getSessionId(),
 	});
 	const extensionsResult = options.extensionFactories
 		? await createTestExtensionsResult(options.extensionFactories, tempDir)

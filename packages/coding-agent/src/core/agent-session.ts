@@ -22,6 +22,7 @@ import type {
 	AgentState,
 	AgentTool,
 	PrepareNextTurnContext,
+	StreamFn,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type {
@@ -73,6 +74,7 @@ import {
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
+	type ProviderRequestOrigin,
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
@@ -94,7 +96,7 @@ import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+import type { BranchSummaryEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
@@ -438,6 +440,28 @@ export class AgentSession {
 		} catch {
 			return {};
 		}
+	}
+
+	private _getAuxiliaryStreamFn(origin: Exclude<ProviderRequestOrigin, "agent">): StreamFn {
+		const sessionId = this.sessionManager.getSessionId();
+		if (!sessionId.trim()) {
+			throw new Error("Cannot issue a provider request without an active session ID");
+		}
+		const streamFn = this.agent.streamFn;
+
+		return (model, context, options) =>
+			streamFn(model, context, {
+				...options,
+				sessionId,
+				onPayload: async (payload, model) => {
+					const transformedPayload = (await options?.onPayload?.(payload, model)) ?? payload;
+					const runner = this._extensionRunner;
+					if (!runner.hasHandlers("before_provider_request")) {
+						return transformedPayload;
+					}
+					return runner.emitBeforeProviderRequest(transformedPayload, origin, options?.signal);
+				},
+			});
 	}
 
 	/**
@@ -1873,7 +1897,7 @@ export class AgentSession {
 					customInstructions,
 					this._compactionAbortController.signal,
 					this.thinkingLevel,
-					this.agent.streamFn,
+					this._getAuxiliaryStreamFn("compaction_summary"),
 					env,
 				);
 				summary = result.summary;
@@ -1886,16 +1910,19 @@ export class AgentSession {
 				throw new Error("Compaction cancelled");
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
+			const compactionEntryId = this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+			);
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
 
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
+			const savedEntry = this.sessionManager.getEntry(compactionEntryId);
+			const savedCompactionEntry = savedEntry?.type === "compaction" ? savedEntry : undefined;
 
 			if (this._extensionRunner && savedCompactionEntry) {
 				await this._extensionRunner.emit({
@@ -2134,7 +2161,7 @@ export class AgentSession {
 					undefined,
 					this._autoCompactionAbortController.signal,
 					this.thinkingLevel,
-					this.agent.streamFn,
+					this._getAuxiliaryStreamFn("compaction_summary"),
 					env,
 				);
 				summary = compactResult.summary;
@@ -2154,16 +2181,19 @@ export class AgentSession {
 				return false;
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
+			const compactionEntryId = this.sessionManager.appendCompaction(
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				details,
+				fromExtension,
+			);
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
 
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
+			const savedEntry = this.sessionManager.getEntry(compactionEntryId);
+			const savedCompactionEntry = savedEntry?.type === "compaction" ? savedEntry : undefined;
 
 			if (this._extensionRunner && savedCompactionEntry) {
 				await this._extensionRunner.emit({
@@ -2994,7 +3024,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFn,
+					streamFn: this._getAuxiliaryStreamFn("branch_summary"),
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };

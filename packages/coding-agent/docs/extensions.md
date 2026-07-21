@@ -296,7 +296,7 @@ user sends prompt ────────────────────�
   │   ├─► turn_start                               │       │
   │   ├─► context (can modify messages)            │       │
   │   ├─► before_provider_headers (can mutate headers)     |
-  │   ├─► before_provider_request (can inspect or replace payload)
+  │   ├─► before_provider_request (trusted session/origin; can inspect or replace payload)
   │   ├─► after_provider_response (status + headers, before stream consume)
   │   │                                            │       │
   │   │   LLM responds, may call tools:            │       │
@@ -672,10 +672,25 @@ Runs once per provider request; retries reuse the same headers rather than re-fi
 
 Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
 
+`event.sessionId` is the non-empty ID supplied by Pi's active `SessionManager`. `event.origin` is a trusted Pi-owned discriminator:
+
+- `"agent"` for normal agent turns
+- `"compaction_summary"` for manual, threshold, overflow, and turn-prefix compaction summaries
+- `"branch_summary"` for summaries created while navigating the session tree
+
+Pi does not infer either value from payload content. Auxiliary summaries receive the same payload-replacement semantics as normal agent turns, but do not run agent context hooks or automatic checkpoint replay.
+
+For every origin, `ctx.signal` is the exact abort signal attached to that provider request. Auxiliary
+requests therefore expose their compaction or branch-summary lifecycle signal rather than an unrelated
+agent-run signal.
+
+The new metadata is additive: existing handlers that only inspect or replace `event.payload` keep the same behavior. An extension that depends on attribution must require a Pi version that supplies these fields; it must not treat missing metadata from an older host as an `"agent"` request.
+
 This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Pi's system prompt string rather than the final serialized provider payload.
 
 ```typescript
 pi.on("before_provider_request", (event, ctx) => {
+  console.log(event.origin, event.sessionId);
   console.log(JSON.stringify(event.payload, null, 2));
 
   // Optional: replace payload

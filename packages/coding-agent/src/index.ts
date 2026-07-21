@@ -108,6 +108,7 @@ export type {
 	ProjectTrustHandler,
 	ProviderConfig,
 	ProviderModelConfig,
+	ProviderRequestOrigin,
 	ReadToolCallEvent,
 	RegisteredCommand,
 	RegisteredTool,
