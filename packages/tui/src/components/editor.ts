@@ -212,6 +212,13 @@ interface EditorState {
 	cursorCol: number;
 }
 
+/** Undo snapshot: editor text state plus the paste registry. */
+interface EditorSnapshot {
+	state: EditorState;
+	pastes: Map<number, string>;
+	pasteCounter: number;
+}
+
 interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
@@ -318,7 +325,7 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<{ state: EditorState; pastes: Map<number, string>; pasteCounter: number }>();
+	private undoStack = new UndoStack<EditorSnapshot>();
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
@@ -1281,16 +1288,37 @@ export class Editor implements Component, Focusable {
 			if (isPastedSegmented) {
 				// This contains the id part e.g 4 from [paste #4 +123 lines]
 				const targetId = Number(isPastedSegmented[1]);
-				const before = line.slice(0, this.state.cursorCol - graphemeLength);
-				const after = line.slice(this.state.cursorCol);
-				this.state.lines[this.state.cursorLine] = before + after;
-				this.setCursorCol(this.state.cursorCol - graphemeLength);
-				const markerStillExists = this.state.lines.some((currentLine) =>
-					Array.from(currentLine.matchAll(PASTE_MARKER_REGEX)).some((match) => Number(match[1]) === targetId),
-				);
-				if (!markerStillExists) this.pastes.delete(targetId);
-				if (this.onChange) this.onChange(this.getText());
-				return;
+				let markerInstances = 0;
+				for (const currentLine of this.state.lines) {
+					for (const match of currentLine.matchAll(PASTE_MARKER_REGEX)) {
+						if (Number(match[1]) === targetId) markerInstances++;
+					}
+				}
+
+				// Kill/yank can duplicate a marker. Keep its registry entry until
+				// the final instance is removed.
+				if (markerInstances <= 1) {
+					this.pastes.delete(targetId);
+					this.pasteCounter--;
+
+					// Shift registry entries down in ascending id order, independent
+					// of marker order in the text ([paste #3] becomes [paste #2] when
+					// [paste #1] is removed).
+					const higherIds = [...this.pastes.keys()].filter((id) => id > targetId).sort((a, b) => a - b);
+					for (const id of higherIds) {
+						this.pastes.set(id - 1, this.pastes.get(id)!);
+						this.pastes.delete(id);
+					}
+
+					// Renumber markers with ids greater than the removed one.
+					this.state.lines = this.state.lines.map((line) =>
+						line.replace(PASTE_MARKER_REGEX, (fullMatch, idGroup, suffixGroup) => {
+							const x = Number(idGroup);
+							if (x <= targetId) return fullMatch;
+							return `[paste #${x - 1}${suffixGroup}]`;
+						}),
+					);
+				}
 			}
 
 			line = this.state.lines[this.state.cursorLine] || "";
