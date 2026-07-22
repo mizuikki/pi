@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, AuthResult, Model, Provider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 
@@ -92,8 +92,16 @@ export class ModelRegistry {
 		return this.runtime.getProviderAuthStatus(provider);
 	}
 
+	getProvider(provider: string): Provider | undefined {
+		return this.runtime.getProvider(provider);
+	}
+
 	getProviderDisplayName(provider: string): string {
 		return this.runtime.getProvider(provider)?.name ?? provider;
+	}
+
+	getProviderAuth(provider: string): Promise<AuthResult | undefined> {
+		return this.runtime.getAuth(provider);
 	}
 
 	async getApiKeyForProvider(provider: string): Promise<string | undefined> {
@@ -108,8 +116,24 @@ export class ModelRegistry {
 		return this.runtime.isUsingOAuth(model.provider);
 	}
 
-	registerProvider(providerName: string, config: ProviderConfigInput, owner?: string): void {
-		this.runtime.registerProvider(providerName, config, owner);
+	registerProvider(provider: Provider, owner?: string): void;
+	registerProvider(providerName: string, config: ProviderConfigInput, owner?: string): void;
+	registerProvider(
+		providerOrName: Provider | string,
+		configOrOwner?: ProviderConfigInput | string,
+		owner?: string,
+	): void {
+		if (typeof providerOrName === "string") {
+			if (!configOrOwner || typeof configOrOwner === "string") {
+				throw new Error("Provider config is required when registering by name");
+			}
+			this.runtime.registerProvider(providerOrName, configOrOwner, owner);
+			return;
+		}
+		this.runtime.registerNativeProvider(
+			providerOrName,
+			typeof configOrOwner === "string" ? configOrOwner : undefined,
+		);
 	}
 
 	unregisterProvider(providerName: string, owner?: string): void {
@@ -122,6 +146,10 @@ export class ModelRegistry {
 
 	getRegisteredProviderConfig(providerName: string): ProviderConfigInput | undefined {
 		return this.runtime.getRegisteredProviderConfig(providerName);
+	}
+
+	getRegisteredNativeProvider(providerName: string): Provider | undefined {
+		return this.runtime.getRegisteredNativeProvider(providerName);
 	}
 
 	getRegisteredProviderIds(): readonly string[] {

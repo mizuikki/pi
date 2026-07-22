@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Provider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
@@ -11,6 +12,28 @@ import type { ExtensionFactory } from "../src/core/sdk.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+
+function nativeAnthropicProvider(baseUrl: string): Provider {
+	const model = { ...getModel("anthropic", "claude-sonnet-4-5")!, baseUrl };
+	return {
+		id: "anthropic",
+		name: "Native Anthropic",
+		baseUrl,
+		auth: {
+			apiKey: {
+				name: "Test API key",
+				resolve: async () => ({ auth: { apiKey: "test-key" }, source: "test" }),
+			},
+		},
+		getModels: () => [model],
+		stream: () => {
+			throw new Error("unused");
+		},
+		streamSimple: () => {
+			throw new Error("unused");
+		},
+	};
+}
 
 describe("AgentSession dynamic provider registration", () => {
 	let tempDir: string;
@@ -89,7 +112,7 @@ describe("AgentSession dynamic provider registration", () => {
 		session: Awaited<ReturnType<typeof createSession>>,
 	): Promise<string | undefined> {
 		let baseUrl: string | undefined;
-		session.agent.streamFn = async (model) => {
+		session.agent.streamFunction = async (model) => {
 			baseUrl = model.baseUrl;
 			throw new Error("stop");
 		};
@@ -123,6 +146,19 @@ describe("AgentSession dynamic provider registration", () => {
 
 		expect(session.model?.baseUrl).toBe("http://localhost:8080/session-start");
 		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/session-start");
+
+		session.dispose();
+	});
+
+	it("registers native pi-ai providers during extension loading", async () => {
+		const session = await createSession([
+			(pi) => {
+				pi.registerProvider(nativeAnthropicProvider("http://localhost:8080/native-top-level"));
+			},
+		]);
+
+		expect(session.model?.baseUrl).toBe("http://localhost:8080/native-top-level");
+		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/native-top-level");
 
 		session.dispose();
 	});
@@ -231,6 +267,28 @@ describe("AgentSession dynamic provider registration", () => {
 		session.dispose();
 	});
 
+	it("reload clears removed native extension providers", async () => {
+		const defaultBaseUrl = getModel("anthropic", "claude-sonnet-4-5")!.baseUrl;
+		let providerEnabled = true;
+		const session = await createSession([
+			(pi) => {
+				if (providerEnabled) {
+					pi.registerProvider(nativeAnthropicProvider("http://localhost:8080/native-reload"));
+				}
+			},
+		]);
+
+		expect(session.model?.baseUrl).toBe("http://localhost:8080/native-reload");
+
+		providerEnabled = false;
+		await session.reload();
+
+		expect(session.model?.baseUrl).toBe(defaultBaseUrl);
+		expect(await capturePromptBaseUrl(session)).toBe(defaultBaseUrl);
+
+		session.dispose();
+	});
+
 	it("reload clears removed extension provider overrides through createAgentSessionServices", async () => {
 		const defaultBaseUrl = getModel("anthropic", "claude-sonnet-4-5")!.baseUrl;
 		let overrideEnabled = true;
@@ -287,6 +345,27 @@ describe("AgentSession dynamic provider registration", () => {
 		expect(session.model?.provider).toBe("reload-provider");
 		expect(session.model?.id).toBe("reload-model");
 		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/reload-provider");
+
+		session.dispose();
+	});
+
+	it("registers native pi-ai providers at command time", async () => {
+		const session = await createSession([
+			(pi) => {
+				pi.registerCommand("use-native", {
+					description: "Use native provider",
+					handler: async () => {
+						pi.registerProvider(nativeAnthropicProvider("http://localhost:8080/native-command"));
+					},
+				});
+			},
+		]);
+
+		await session.bindExtensions({});
+		await session.prompt("/use-native");
+
+		expect(session.model?.baseUrl).toBe("http://localhost:8080/native-command");
+		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/native-command");
 
 		session.dispose();
 	});
