@@ -40,3 +40,12 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+# Test
+.agents/
+.codex/
+.pi/agents/
+.pi/extensions/trellis/
+.pi/prompts/trellis-*.md
+.pi/settings.json
+.trellis/
