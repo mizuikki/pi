@@ -3710,6 +3710,27 @@ describe("Editor component", () => {
 			assert.strictEqual(submitted, paste);
 		});
 
+		it("keeps the paste registry while a duplicate marker remains", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = (t) => {
+				submitted = t;
+			};
+
+			const paste = bigPaste("alpha");
+			editor.handleInput(`\x1b[200~${paste}\x1b[201~`);
+			editor.handleInput("\x01"); // Ctrl+A
+			editor.handleInput("\x0b"); // Ctrl+K: move marker into the kill ring
+			editor.handleInput("\x19"); // Ctrl+Y
+			editor.handleInput("\x19"); // duplicate the same marker
+
+			assert.strictEqual(editor.getText().match(/\[paste #\d+ \+\d+ lines\]/g)?.length, 2);
+			editor.handleInput("\x7f"); // delete only the second marker
+			editor.handleInput("\r");
+
+			assert.strictEqual(submitted, paste);
+		});
+
 		it("undo after deleting the first of two paste markers restores both registry entries", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			let submitted = "";
