@@ -68,6 +68,8 @@ If rebase conflicts occur:
 
 See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
 
+- Only submit pull requests to `mizuikki/pi`.
+
 When reviewing PRs:
 
 - Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
