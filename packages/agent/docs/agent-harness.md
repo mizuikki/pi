@@ -172,6 +172,11 @@ Summary:
 - Result-producing events are reduced by typed reducer tables; app-specific hooks add reducers only for app-specific result-producing events.
 - Hook registration provenance is sidecar metadata on the registration. Resource and tool provenance belongs on app-specific concrete value types.
 - Hook context should be a plain object of facades, not raw internals or late-bound getter mazes.
+- `before_provider_request` is stream-options only; `before_provider_payload` is the payload-rewrite
+  hook and may return at most one inline compaction proposal bound to a harness-issued single-use
+  commit token. Successful inline commits persist a real compaction entry with `retainedTail` and
+  optional usage, then emit `session_compact` with `trigger: "provider_inline"`. Append or readback
+  outcomes that cannot be proven emit `session_compact_indeterminate` and stop provider dispatch.
 
 Event payloads describe what is happening. Harness getters describe latest config for future snapshots. Hook and listener settlement should be awaited in lifecycle order where possible; transport backpressure is handled below the harness by `AssistantMessageStream`, so the harness does not need a separate async event queue merely to keep SSE or websocket reads flowing.
 

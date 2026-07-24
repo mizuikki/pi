@@ -185,15 +185,17 @@ Sequential transform. Each handler sees previous output.
 
 ```ts
 let current = event;
+let compaction;
 
 for (const handler of handlers("before_provider_payload")) {
 	const result = await handler(current, ctx, signal);
 	if (result !== undefined) {
 		current = { ...current, payload: result.payload };
+		if (result.compaction !== undefined) compaction = result.compaction;
 	}
 }
 
-return changed ? { payload: current.payload } : undefined;
+return changed || compaction !== undefined ? { payload: current.payload, compaction } : undefined;
 ```
 
 ### Before agent start
@@ -398,6 +400,7 @@ No blocker for:
 
 - `context`
 - `before_provider_request`
+- `before_provider_payload`
 - `after_provider_response`
 - `before_agent_start`
 - `message_end`
@@ -422,6 +425,8 @@ When porting coding-agent, special cases must be copied:
 - `message_end`: replacement must keep same role.
 - `before_agent_start`: `ctx.getSystemPrompt()` must reflect current chained prompt.
 - `resources_discover`: aggregate paths and keep extension source.
+- `before_provider_request`: stream-option patch chain, not payload rewrite.
+- `before_provider_payload`: payload rewrite chain plus at most one inline compaction proposal.
 - `tool_call`: argument mutation remains visible to later handlers.
 - `tool_result`: later handlers see prior patches.
 

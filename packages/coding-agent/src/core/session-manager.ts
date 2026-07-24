@@ -69,8 +69,9 @@ export interface ModelChangeEntry extends SessionEntryBase {
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
-	firstKeptEntryId: string;
+	firstKeptEntryId?: string;
 	tokensBefore: number;
+	retainedTail?: AgentMessage[];
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
 	details?: T;
 	/** Usage from the LLM call(s) that generated this summary, if available */
@@ -198,6 +199,7 @@ export type ReadonlySessionManager = Pick<
 	| "getEntry"
 	| "getLabel"
 	| "getBranch"
+	| "getFullActivePathSnapshot"
 	| "buildContextEntries"
 	| "getHeader"
 	| "getEntries"
@@ -402,7 +404,10 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 		return [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)];
 	}
 	if (entry.type === "compaction") {
-		return [createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)];
+		return [
+			createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+			...(entry.retainedTail ?? []),
+		];
 	}
 	return [];
 }
@@ -439,6 +444,10 @@ export function buildContextEntries(
 	}
 
 	const contextEntries: SessionEntry[] = [compaction];
+	if (compaction.retainedTail) {
+		contextEntries.push(...path.slice(compactionIdx + 1));
+		return contextEntries;
+	}
 	let foundFirstKept = false;
 	for (let i = 0; i < compactionIdx; i++) {
 		const entry = path[i];
@@ -1096,11 +1105,12 @@ export class SessionManager {
 	/** Append a compaction summary as child of current leaf, then advance leaf. Returns entry id. */
 	appendCompaction<T = unknown>(
 		summary: string,
-		firstKeptEntryId: string,
+		firstKeptEntryId: string | undefined,
 		tokensBefore: number,
 		details?: T,
 		fromHook?: boolean,
 		usage?: Usage,
+		retainedTail?: AgentMessage[],
 	): string {
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
@@ -1110,6 +1120,7 @@ export class SessionManager {
 			summary,
 			firstKeptEntryId,
 			tokensBefore,
+			retainedTail,
 			details,
 			usage,
 			fromHook,
@@ -1267,6 +1278,15 @@ export class SessionManager {
 		}
 		path.reverse();
 		return path;
+	}
+
+	/**
+	 * Read-only full active-path snapshot that continues through self-contained
+	 * compaction boundaries. Normal context APIs remain checkpoint-bounded via
+	 * buildContextEntries()/buildSessionContext().
+	 */
+	getFullActivePathSnapshot(fromId?: string): SessionEntry[] {
+		return this.getBranch(fromId);
 	}
 
 	/**

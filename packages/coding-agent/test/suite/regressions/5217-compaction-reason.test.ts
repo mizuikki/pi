@@ -1,5 +1,6 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { CompactionTrigger } from "../../../src/core/extensions/index.ts";
 import type { ExtensionFactory } from "../../../src/index.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
@@ -9,7 +10,7 @@ type SessionWithCompactionInternals = {
 
 interface RecordedCompactionEvent {
 	type: "session_before_compact" | "session_compact";
-	reason: "manual" | "threshold" | "overflow";
+	reason: CompactionTrigger;
 	willRetry: boolean;
 }
 

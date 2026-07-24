@@ -81,7 +81,7 @@ export function validateSessionTreeEntry(entry: SessionTreeEntry): void {
 		case "compaction":
 			if (
 				typeof entry.summary !== "string" ||
-				typeof entry.firstKeptEntryId !== "string" ||
+				(entry.firstKeptEntryId !== undefined && typeof entry.firstKeptEntryId !== "string") ||
 				typeof entry.tokensBefore !== "number" ||
 				(entry.retainedTail !== undefined && !Array.isArray(entry.retainedTail))
 			) {
@@ -171,7 +171,7 @@ export function decodeEntry(row: SessionEntryRow): SessionTreeEntry {
 		case "compaction":
 			if (
 				typeof payload.summary !== "string" ||
-				typeof payload.firstKeptEntryId !== "string" ||
+				(payload.firstKeptEntryId !== undefined && typeof payload.firstKeptEntryId !== "string") ||
 				typeof payload.tokensBefore !== "number" ||
 				(payload.retainedTail !== undefined && !Array.isArray(payload.retainedTail))
 			) {

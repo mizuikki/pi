@@ -477,6 +477,7 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 	getLabel(id: string): Promise<string | undefined>;
 	getSessionName(): Promise<string | undefined>;
 	getSessionStats(): Promise<SessionStats>;
+	getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]>;
 	getPathToRootOrCompaction(leafId: string | null): Promise<SessionTreeEntry[]>;
 	getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]>;
 }
@@ -572,10 +573,39 @@ export interface BeforeProviderRequestEvent {
 	streamOptions: AgentHarnessStreamOptions;
 }
 
+export type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
+export type CompactionTrigger = "manual" | "threshold" | "overflow" | "provider_inline";
+
+export declare const providerCompactionTokenBrand: unique symbol;
+
+export interface ProviderCompactionCommitToken {
+	readonly [providerCompactionTokenBrand]: true;
+}
+
+export interface ProviderPayloadAttribution {
+	sessionId: string;
+	origin: ProviderRequestOrigin;
+	signal: AbortSignal;
+	compaction?: {
+		token: ProviderCompactionCommitToken;
+		candidateLeafId: string;
+		candidateRetainedTail: readonly AgentMessage[];
+	};
+}
+
+export interface ProviderCompactionProposal {
+	token: ProviderCompactionCommitToken;
+	summary: string;
+	tokensBefore: number;
+	usage?: Usage;
+	details?: unknown;
+}
+
 export interface BeforeProviderPayloadEvent {
 	type: "before_provider_payload";
 	model: Model<any>;
 	payload: unknown;
+	attribution: ProviderPayloadAttribution;
 }
 
 export interface AfterProviderResponseEvent {
@@ -614,6 +644,13 @@ export interface SessionCompactEvent {
 	type: "session_compact";
 	compactionEntry: CompactionEntry;
 	fromHook: boolean;
+	trigger: CompactionTrigger;
+}
+
+export interface SessionCompactIndeterminateEvent {
+	type: "session_compact_indeterminate";
+	entryId?: string;
+	trigger: "provider_inline";
 }
 
 export interface SessionBeforeTreeEvent {
@@ -697,6 +734,7 @@ export type AgentHarnessOwnEvent<
 	| ToolResultEvent
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
+	| SessionCompactIndeterminateEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent
 	| RetryScheduledEvent
@@ -726,6 +764,7 @@ export interface BeforeProviderRequestResult {
 
 export interface BeforeProviderPayloadResult {
 	payload: unknown;
+	compaction?: ProviderCompactionProposal;
 }
 
 export interface ToolCallResult {
@@ -769,6 +808,7 @@ export type AgentHarnessEventResultMap = {
 	tool_result: ToolResultPatch | undefined;
 	session_before_compact: SessionBeforeCompactResult | undefined;
 	session_compact: undefined;
+	session_compact_indeterminate: undefined;
 	session_before_tree: SessionBeforeTreeResult | undefined;
 	session_tree: undefined;
 	retry_scheduled: undefined;

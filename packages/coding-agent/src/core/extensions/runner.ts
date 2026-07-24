@@ -2,6 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
+import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
@@ -15,6 +16,8 @@ import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
 	BeforeProviderHeadersEvent,
+	BeforeProviderPayloadEvent,
+	BeforeProviderPayloadEventResult,
 	BeforeProviderRequestEvent,
 	CompactOptions,
 	ContextEvent,
@@ -44,7 +47,9 @@ import type {
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
+	ProviderCompactionProposal,
 	ProviderConfig,
+	ProviderPayloadAttribution,
 	ProviderRequestOrigin,
 	RegisteredCommand,
 	RegisteredTool,
@@ -56,6 +61,8 @@ import type {
 	SessionBeforeForkResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
+	SessionCompactEvent,
+	SessionCompactIndeterminateEvent,
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -111,6 +118,13 @@ const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltI
 	return builtinKeybindings;
 };
 
+class ProviderPayloadReducerError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ProviderPayloadReducerError";
+	}
+}
+
 /** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
@@ -128,6 +142,7 @@ type RunnerEmitEvent = Exclude<
 	| ToolResultEvent
 	| UserBashEvent
 	| ContextEvent
+	| BeforeProviderPayloadEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
 	| BeforeAgentStartEvent
@@ -569,6 +584,12 @@ export class ExtensionRunner {
 			if (handlers && handlers.length > 0) {
 				return true;
 			}
+			if (eventType === "before_provider_payload") {
+				const legacyHandlers = ext.handlers.get("before_provider_request");
+				if (legacyHandlers && legacyHandlers.length > 0) {
+					return true;
+				}
+			}
 		}
 		return false;
 	}
@@ -816,6 +837,28 @@ export class ExtensionRunner {
 		return result as RunnerEmitResult<TEvent>;
 	}
 
+	/** Emit a transaction outcome event without swallowing handler failures. */
+	async emitCompactionTransactionEvent(event: SessionCompactEvent | SessionCompactIndeterminateEvent): Promise<void> {
+		const ctx = this.createContext();
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get(event.type);
+			if (!handlers || handlers.length === 0) continue;
+			for (const handler of handlers) {
+				try {
+					await handler(event, ctx);
+				} catch (error) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: event.type,
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+					throw error;
+				}
+			}
+		}
+	}
+
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
 		const ctx = this.createContext();
 		let currentMessage = event.message;
@@ -1039,6 +1082,130 @@ export class ExtensionRunner {
 		}
 
 		return currentPayload;
+	}
+
+	private sealProviderPayload(payload: unknown): unknown {
+		const sealed = structuredClone(payload);
+		const stack: unknown[] = [sealed];
+		const seen = new Set<object>();
+		while (stack.length > 0) {
+			const value = stack.pop();
+			if (typeof value !== "object" || value === null || seen.has(value)) continue;
+			seen.add(value);
+			if (Array.isArray(value)) {
+				for (const item of value) stack.push(item);
+			} else {
+				for (const item of Object.values(value as Record<string, unknown>)) {
+					stack.push(item);
+				}
+			}
+			Object.freeze(value);
+		}
+		return sealed;
+	}
+
+	private assertSealedProviderPayload(nextPayload: unknown, sealedPayload: unknown): void {
+		if (!isDeepStrictEqual(nextPayload, sealedPayload)) {
+			throw new ProviderPayloadReducerError("Provider payload cannot change after an inline compaction proposal");
+		}
+	}
+
+	async emitBeforeProviderPayload(
+		model: Model<any>,
+		payload: unknown,
+		attribution: ProviderPayloadAttribution,
+		signal?: AbortSignal,
+	): Promise<BeforeProviderPayloadEventResult> {
+		const ctx = this.createContext(signal);
+		let currentPayload = payload;
+		let sealedPayload: unknown | undefined;
+		let proposal: ProviderCompactionProposal | undefined;
+		const sessionId = attribution.sessionId;
+		if (!sessionId.trim()) {
+			throw new Error("Cannot issue a provider request without an active session ID");
+		}
+
+		for (const ext of this.extensions) {
+			const payloadHandlers = ext.handlers.get("before_provider_payload") ?? [];
+			const legacyHandlers = ext.handlers.get("before_provider_request") ?? [];
+			if (payloadHandlers.length === 0 && legacyHandlers.length === 0) continue;
+
+			for (const handler of payloadHandlers) {
+				try {
+					const event: BeforeProviderPayloadEvent = {
+						type: "before_provider_payload",
+						model,
+						payload: currentPayload,
+						attribution,
+					};
+					const handlerResult = (await handler(event, ctx)) as BeforeProviderPayloadEventResult | undefined;
+					if (handlerResult === undefined) continue;
+					if (sealedPayload !== undefined) {
+						this.assertSealedProviderPayload(handlerResult.payload, sealedPayload);
+						if (handlerResult.compaction !== undefined) {
+							throw new ProviderPayloadReducerError(
+								"before_provider_payload may return at most one compaction proposal",
+							);
+						}
+						currentPayload = sealedPayload;
+						continue;
+					}
+					currentPayload = handlerResult.payload;
+					if (handlerResult.compaction !== undefined) {
+						sealedPayload = this.sealProviderPayload(handlerResult.payload);
+						currentPayload = sealedPayload;
+						proposal = handlerResult.compaction;
+					}
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "before_provider_payload",
+						error: message,
+						stack,
+					});
+					if (sealedPayload !== undefined || err instanceof ProviderPayloadReducerError) {
+						throw err;
+					}
+				}
+			}
+
+			for (const handler of legacyHandlers) {
+				try {
+					const event: BeforeProviderRequestEvent = {
+						type: "before_provider_request",
+						payload: currentPayload,
+						sessionId,
+						origin: attribution.origin,
+					};
+					const handlerResult = await handler(event, ctx);
+					if (handlerResult === undefined) continue;
+					if (sealedPayload !== undefined) {
+						this.assertSealedProviderPayload(handlerResult, sealedPayload);
+						currentPayload = sealedPayload;
+						continue;
+					}
+					currentPayload = handlerResult;
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "before_provider_request",
+						error: message,
+						stack,
+					});
+					if (sealedPayload !== undefined || err instanceof ProviderPayloadReducerError) {
+						throw err;
+					}
+				}
+			}
+		}
+
+		return proposal === undefined
+			? { payload: currentPayload }
+			: { payload: sealedPayload ?? currentPayload, compaction: proposal };
 	}
 
 	async emitBeforeProviderHeaders(headers: ProviderHeaders): Promise<ProviderHeaders> {

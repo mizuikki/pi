@@ -181,6 +181,21 @@ export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionM
 		return path;
 	}
 
+	async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
+		if (leafId === null) return [];
+		const path: SessionTreeEntry[] = [];
+		let current = this.byId.get(leafId);
+		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
+		while (current) {
+			path.unshift(current);
+			if (!current.parentId) break;
+			const parent = this.byId.get(current.parentId);
+			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
+			current = parent;
+		}
+		return path;
+	}
+
 	async getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]> {
 		const start = options?.afterEntrySeq ?? 0;
 		const end = options?.limit === undefined ? undefined : start + options.limit;
