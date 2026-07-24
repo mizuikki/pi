@@ -88,4 +88,51 @@ describe("sqlite-node adapter", () => {
 			await db.close();
 		}
 	});
+
+	it("stops checkpoint traversal at a compaction without retained tail or cut point", async () => {
+		const root = createTempDir();
+		const databasePath = join(root, "sessions.sqlite");
+		const db = await createNodeSqliteFactory().open(databasePath);
+		try {
+			await applyMigrations(db);
+			const storage = await SqliteSessionStorage.create(db, databasePath, {
+				cwd: root,
+				sessionId: "session-1",
+			});
+			await storage.appendEntry({
+				type: "message",
+				id: "root",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00.000Z",
+				message: createUserMessage("root"),
+			});
+			await storage.appendEntry({
+				type: "compaction",
+				id: "compaction",
+				parentId: "root",
+				timestamp: "2026-01-01T00:00:01.000Z",
+				summary: "summary",
+				tokensBefore: 10,
+			});
+			await storage.appendEntry({
+				type: "message",
+				id: "after",
+				parentId: "compaction",
+				timestamp: "2026-01-01T00:00:02.000Z",
+				message: createUserMessage("after"),
+			});
+
+			expect((await storage.getPathToRootOrCompaction("after")).map((entry) => entry.id)).toEqual([
+				"compaction",
+				"after",
+			]);
+			expect((await storage.getPathToRoot("after")).map((entry) => entry.id)).toEqual([
+				"root",
+				"compaction",
+				"after",
+			]);
+		} finally {
+			await db.close();
+		}
+	});
 });

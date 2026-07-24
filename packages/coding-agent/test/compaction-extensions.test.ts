@@ -906,6 +906,57 @@ describe("Provider payload compaction extensions", () => {
 		alteredHarness.sessionManager.getEntry = originalGetEntry;
 	});
 
+	it("does not report a verified inline commit as indeterminate when success dispatch fails", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first reply"), fauxAssistantMessage("second reply")]);
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+
+		const controller = (
+			harness.session as unknown as {
+				_providerPayloadCompaction: {
+					createAttribution: (
+						model: unknown,
+						origin: "agent",
+						signal: AbortSignal,
+					) => { compaction?: { token: unknown } };
+					commitPayload: (model: unknown, result: unknown, attribution: unknown) => Promise<unknown>;
+				};
+			}
+		)._providerPayloadCompaction;
+		const runner = (
+			harness.session as unknown as {
+				_extensionRunner: { emitCompactionTransactionEvent: (event: { type: string }) => Promise<void> };
+			}
+		)._extensionRunner;
+		const originalEmit = runner.emitCompactionTransactionEvent.bind(runner);
+		const emitted: string[] = [];
+		runner.emitCompactionTransactionEvent = async (event) => {
+			emitted.push(event.type);
+			if (event.type === "session_compact") throw new Error("success handler failed");
+			await originalEmit(event as never);
+		};
+		const attribution = controller.createAttribution(harness.getModel(), "agent", new AbortController().signal);
+
+		await expect(
+			controller.commitPayload(
+				harness.getModel(),
+				{
+					payload: { steps: ["provider"] },
+					compaction: {
+						token: attribution.compaction!.token,
+						summary: "inline summary",
+						tokensBefore: 1,
+					},
+				},
+				attribution,
+			),
+		).rejects.toThrow("success handler failed");
+		expect(emitted).toEqual(["session_compact"]);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
 	it("binds candidateLeafId as parent while firstKeptEntryId remains the retained-tail cut point", async () => {
 		const harness = await createHarness({
 			// Keep a multi-message retained tail while still leaving a summarized prefix.

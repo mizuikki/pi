@@ -438,7 +438,8 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 			if (stopAtEntryId !== null && current.id === stopAtEntryId) break;
 			if (current.type === "compaction") {
 				if (current.retainedTail) break;
-				stopAtEntryId = current.firstKeptEntryId ?? null;
+				if (current.firstKeptEntryId === undefined) break;
+				stopAtEntryId = current.firstKeptEntryId;
 			}
 			if (!current.parentId) break;
 			const parent = this.byId.get(current.parentId);

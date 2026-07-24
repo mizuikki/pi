@@ -463,6 +463,7 @@ export class AgentHarness<
 		const tokensBefore = Math.trunc(proposal.tokensBefore);
 		const retainedTail = [...preparation.retainedTail];
 		let entryId: string | undefined;
+		let entry: Awaited<ReturnType<Session["getEntry"]>>;
 		try {
 			entryId = await this.session.appendCompaction(
 				proposal.summary,
@@ -473,7 +474,7 @@ export class AgentHarness<
 				proposal.usage,
 				retainedTail,
 			);
-			const entry = await this.session.getEntry(entryId);
+			entry = await this.session.getEntry(entryId);
 			if (
 				entry?.type !== "compaction" ||
 				entry.id !== entryId ||
@@ -487,12 +488,6 @@ export class AgentHarness<
 			) {
 				throw new ProviderPayloadReducerError("Inline compaction commit could not be verified after append");
 			}
-			await this.emitTransactionEvent({
-				type: "session_compact",
-				compactionEntry: entry,
-				fromHook: true,
-				trigger: "provider_inline",
-			});
 		} catch (error) {
 			try {
 				await this.emitTransactionEvent({
@@ -505,6 +500,12 @@ export class AgentHarness<
 			}
 			throw error;
 		}
+		await this.emitTransactionEvent({
+			type: "session_compact",
+			compactionEntry: entry!,
+			fromHook: true,
+			trigger: "provider_inline",
+		});
 		return payload;
 	}
 

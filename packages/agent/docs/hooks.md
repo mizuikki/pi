@@ -191,7 +191,10 @@ for (const handler of handlers("before_provider_payload")) {
 	const result = await handler(current, ctx, signal);
 	if (result !== undefined) {
 		current = { ...current, payload: result.payload };
-		if (result.compaction !== undefined) compaction = result.compaction;
+		if (result.compaction !== undefined) {
+			if (compaction !== undefined) throw new Error("Only one compaction proposal is allowed");
+			compaction = result.compaction;
+		}
 	}
 }
 

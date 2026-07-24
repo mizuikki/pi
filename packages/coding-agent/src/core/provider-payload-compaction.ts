@@ -182,6 +182,7 @@ export class ProviderPayloadCompactionController {
 		const parentId = snapshot.leafId;
 		const retainedTail = [...preparation.retainedTail];
 		let compactionEntryId: string | undefined;
+		let savedEntry: ReturnType<SessionManager["getEntry"]>;
 		try {
 			compactionEntryId = this.#sessionManager.appendCompaction(
 				summary,
@@ -192,7 +193,7 @@ export class ProviderPayloadCompactionController {
 				usage,
 				retainedTail,
 			);
-			const savedEntry = this.#sessionManager.getEntry(compactionEntryId);
+			savedEntry = this.#sessionManager.getEntry(compactionEntryId);
 			if (
 				savedEntry?.type !== "compaction" ||
 				savedEntry.id !== compactionEntryId ||
@@ -206,14 +207,6 @@ export class ProviderPayloadCompactionController {
 			) {
 				throw new Error("Inline compaction commit could not be verified after append");
 			}
-			await this.#extensionRunnerRef.current?.emitCompactionTransactionEvent({
-				type: "session_compact",
-				compactionEntry: savedEntry,
-				fromExtension: true,
-				reason: "provider_inline",
-				trigger: "provider_inline",
-				willRetry: false,
-			});
 		} catch (error) {
 			try {
 				await this.#extensionRunnerRef.current?.emitCompactionTransactionEvent({
@@ -226,6 +219,14 @@ export class ProviderPayloadCompactionController {
 			}
 			throw error;
 		}
+		await this.#extensionRunnerRef.current?.emitCompactionTransactionEvent({
+			type: "session_compact",
+			compactionEntry: savedEntry!,
+			fromExtension: true,
+			reason: "provider_inline",
+			trigger: "provider_inline",
+			willRetry: false,
+		});
 		return result.payload;
 	}
 }

@@ -678,7 +678,7 @@ Runs once per provider request; retries reuse the same headers rather than re-fi
 
 #### before_provider_payload
 
-Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
+Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. To replace it, return an object whose `payload` property contains the replacement for later handlers and the actual request; the object may also include an optional `compaction` proposal.
 
 `event.attribution.sessionId` is the non-empty ID supplied by Pi's active `SessionManager`. `event.attribution.origin` is a trusted Pi-owned discriminator:
 
@@ -711,9 +711,10 @@ compaction proposal. A handler may return:
 
 Pi validates freshness, rematerializes the retained tail, persists the real compaction entry, emits
 `session_compact`, and only then allows final provider dispatch. Auxiliary requests never receive a
-compaction token. If append, exact readback, or the successful commit event fails, Pi emits
-`session_compact_indeterminate` and prevents provider dispatch; extensions that maintain replay
-state must fail closed on that event.
+compaction token. If append or exact readback fails, Pi emits `session_compact_indeterminate` and
+prevents provider dispatch; extensions that maintain replay state must fail closed on that event. A
+`session_compact` handler failure also prevents dispatch, but the already verified commit is not
+reported as indeterminate.
 
 For one compatibility release, coding-agent also accepts payload-rewrite handlers registered on
 `before_provider_request`. Those handlers participate in the same reducer pass but cannot return

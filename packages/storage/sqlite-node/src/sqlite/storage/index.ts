@@ -133,7 +133,8 @@ export class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadat
 			if (stopAtEntryId !== null && current.id === stopAtEntryId) break;
 			if (current.type === "compaction") {
 				if (current.retainedTail) break;
-				stopAtEntryId = current.firstKeptEntryId ?? null;
+				if (current.firstKeptEntryId === undefined) break;
+				stopAtEntryId = current.firstKeptEntryId;
 			}
 			if (!current.parentId) break;
 			const parent = await this.getEntry(current.parentId);

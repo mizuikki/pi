@@ -210,6 +210,37 @@ describe("InMemorySessionStorage", () => {
 			"after-compaction",
 		]);
 	});
+
+	it("treats a compaction without retained tail or cut point as a checkpoint boundary", async () => {
+		const root: MessageEntry = {
+			type: "message",
+			id: "root",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("root"),
+		};
+		const compaction: CompactionEntry = {
+			type: "compaction",
+			id: "compaction",
+			parentId: "root",
+			timestamp: "2026-01-01T00:00:01.000Z",
+			summary: "summary",
+			tokensBefore: 10,
+		};
+		const after: MessageEntry = {
+			...root,
+			id: "after",
+			parentId: "compaction",
+			message: createUserMessage("after"),
+		};
+		const storage = new InMemorySessionStorage({ entries: [root, compaction, after] });
+
+		expect((await storage.getPathToRootOrCompaction("after")).map((entry) => entry.id)).toEqual([
+			"compaction",
+			"after",
+		]);
+		expect((await storage.getPathToRoot("after")).map((entry) => entry.id)).toEqual(["root", "compaction", "after"]);
+	});
 });
 
 describe("JsonlSessionStorage", () => {
@@ -369,6 +400,42 @@ describe("JsonlSessionStorage", () => {
 		expect((await reloaded.getEntries()).at(-1)).toMatchObject({ type: "leaf", targetId: "root" });
 		expect((await loaded.getPathToRootOrCompaction("child")).map((entry) => entry.id)).toEqual(["root", "child"]);
 		expect((await loaded.getPathToRoot("child")).map((entry) => entry.id)).toEqual(["root", "child"]);
+	});
+
+	it("loads a compaction without a retained tail or cut point as a checkpoint boundary", async () => {
+		const dir = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: dir });
+		const filePath = join(dir, "session.jsonl");
+		const storage = await JsonlSessionStorage.create(env, filePath, { cwd: dir, sessionId: "session-1" });
+		await storage.appendEntry({
+			type: "message",
+			id: "root",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("root"),
+		});
+		await storage.appendEntry({
+			type: "compaction",
+			id: "compaction",
+			parentId: "root",
+			timestamp: "2026-01-01T00:00:01.000Z",
+			summary: "summary",
+			tokensBefore: 10,
+		});
+		await storage.appendEntry({
+			type: "message",
+			id: "after",
+			parentId: "compaction",
+			timestamp: "2026-01-01T00:00:02.000Z",
+			message: createUserMessage("after"),
+		});
+
+		const loaded = await JsonlSessionStorage.open(env, filePath);
+		expect((await loaded.getPathToRootOrCompaction("after")).map((entry) => entry.id)).toEqual([
+			"compaction",
+			"after",
+		]);
+		expect((await loaded.getPathToRoot("after")).map((entry) => entry.id)).toEqual(["root", "compaction", "after"]);
 	});
 
 	it("finds entries by type", async () => {

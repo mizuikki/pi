@@ -74,6 +74,7 @@ export async function getMaterializedBranchPathOrCompaction(
 		if (firstKeptIndex >= 0 && firstKeptIndex <= latestCompactionIndex) {
 			return entries.slice(firstKeptIndex);
 		}
+		return entries;
 	}
-	return entries;
+	return entries.slice(latestCompactionIndex);
 }

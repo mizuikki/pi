@@ -529,6 +529,56 @@ describe("AgentHarness stream configuration", () => {
 		alteredSession.getEntry = originalGetEntry;
 	});
 
+	it("does not report a verified inline commit as indeterminate when success dispatch fails", async () => {
+		const registration = newFaux();
+		registration.setResponses([fauxAssistantMessage("ok")]);
+		const session = new Session(new InMemorySessionStorage());
+		await session.appendMessage(createUserMessage("one"));
+		await session.appendMessage(createAssistantMessage("two"));
+		const harness = createHarness({
+			models,
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model: registration.getModel(),
+		});
+		const emitted: string[] = [];
+		harness.on("session_compact", () => {
+			emitted.push("session_compact");
+			throw new Error("success handler failed");
+		});
+		harness.on("session_compact_indeterminate", () => {
+			emitted.push("session_compact_indeterminate");
+			return undefined;
+		});
+		const internal = harness as unknown as {
+			createProviderPayloadAttribution: (
+				model: unknown,
+				signal: AbortSignal,
+			) => Promise<{ origin: "agent"; sessionId: string; signal: AbortSignal; compaction?: { token: object } }>;
+			commitProviderPayloadCompaction: (
+				model: unknown,
+				payload: unknown,
+				proposal: { token: object; summary: string; tokensBefore: number },
+				attribution: { origin: string; sessionId: string; signal: AbortSignal; compaction?: { token: object } },
+			) => Promise<unknown>;
+		};
+		const attribution = await internal.createProviderPayloadAttribution(
+			registration.getModel(),
+			new AbortController().signal,
+		);
+
+		await expect(
+			internal.commitProviderPayloadCompaction(
+				registration.getModel(),
+				{ steps: ["provider"] },
+				{ token: attribution.compaction!.token, summary: "inline summary", tokensBefore: 1 },
+				attribution,
+			),
+		).rejects.toThrow("success handler failed");
+		expect(emitted).toEqual(["session_compact"]);
+		expect((await session.getEntries()).filter((entry) => entry.type === "compaction")).toHaveLength(1);
+	});
+
 	it("binds candidateLeafId as parent while firstKeptEntryId remains the retained-tail cut point", async () => {
 		const registration = newFaux();
 		registration.setResponses([fauxAssistantMessage("ok")]);
