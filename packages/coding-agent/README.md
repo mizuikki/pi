@@ -276,6 +276,13 @@ Long sessions can exhaust context windows. Compaction summarizes older messages 
 
 **Automatic:** Enabled by default. Triggers on context overflow (recovers and retries) or when approaching the limit (proactive). Configure via `/settings` or `settings.json`.
 
+Extensions can inspect or rewrite provider payloads with `before_provider_payload`. For agent-origin
+requests, that hook may return one inline compaction proposal bound to a Pi-issued commit token. A
+successful inline commit emits `session_compact` with `reason` and `trigger` set to
+`"provider_inline"`, and any returned `usage` contributes to the session totals. If the append or
+its exact readback cannot be proven, Pi emits `session_compact_indeterminate` and prevents provider
+dispatch.
+
 Compaction is lossy. The full history remains in the JSONL file; use `/tree` to revisit. Customize compaction behavior via [extensions](#extensions). See [docs/compaction.md](docs/compaction.md) for internals.
 
 ---

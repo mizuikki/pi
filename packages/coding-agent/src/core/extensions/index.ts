@@ -37,9 +37,12 @@ export type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
 	BeforeProviderHeadersEvent,
+	BeforeProviderPayloadEvent,
+	BeforeProviderPayloadEventResult,
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
 	BuildSystemPromptOptions,
+	CompactionTrigger,
 	// Context
 	CompactOptions,
 	// Events - Agent
@@ -108,9 +111,12 @@ export type {
 	ProjectTrustEventDecision,
 	ProjectTrustEventResult,
 	ProjectTrustHandler,
+	ProviderCompactionCommitToken,
+	ProviderCompactionProposal,
 	// Provider Registration
 	ProviderConfig,
 	ProviderModelConfig,
+	ProviderPayloadAttribution,
 	ProviderRequestOrigin,
 	ReadToolCallEvent,
 	ReadToolResultEvent,
@@ -133,6 +139,7 @@ export type {
 	SessionBeforeTreeEvent,
 	SessionBeforeTreeResult,
 	SessionCompactEvent,
+	SessionCompactIndeterminateEvent,
 	SessionEvent,
 	SessionInfoChangedEvent,
 	SessionShutdownEvent,

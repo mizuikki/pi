@@ -92,6 +92,7 @@ export interface CompactionResult<T = unknown> {
 	estimatedTokensAfter?: number;
 	/** Usage from the LLM call(s) that generated this summary, if available */
 	usage?: Usage;
+	retainedTail?: AgentMessage[];
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
 	details?: T;
 }
@@ -688,6 +689,8 @@ export interface CompactionPreparation {
 	messagesToSummarize: AgentMessage[];
 	/** Messages that will be turned into turn prefix summary (if splitting) */
 	turnPrefixMessages: AgentMessage[];
+	/** Recent messages retained after compaction and stored on the compaction entry. */
+	retainedTail: AgentMessage[];
 	/** Whether this is a split turn (cut point in middle of turn) */
 	isSplitTurn: boolean;
 	tokensBefore: number;
@@ -753,6 +756,11 @@ export function prepareCompaction(
 			if (msg) turnPrefixMessages.push(msg);
 		}
 	}
+	const retainedTail: AgentMessage[] = [];
+	for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
+		const msg = getMessageFromEntryForCompaction(pathEntries[i]);
+		if (msg) retainedTail.push(msg);
+	}
 
 	if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
 		return undefined;
@@ -772,6 +780,7 @@ export function prepareCompaction(
 		firstKeptEntryId,
 		messagesToSummarize,
 		turnPrefixMessages,
+		retainedTail,
 		isSplitTurn: cutPoint.isSplitTurn,
 		tokensBefore,
 		previousSummary,
@@ -823,6 +832,7 @@ export async function compact(
 		firstKeptEntryId,
 		messagesToSummarize,
 		turnPrefixMessages,
+		retainedTail,
 		isSplitTurn,
 		tokensBefore,
 		previousSummary,
@@ -906,6 +916,7 @@ export async function compact(
 		firstKeptEntryId,
 		tokensBefore,
 		usage: summaryUsage,
+		retainedTail,
 		details: { readFiles, modifiedFiles } as CompactionDetails,
 	};
 }

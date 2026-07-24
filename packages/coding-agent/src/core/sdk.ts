@@ -11,6 +11,7 @@ import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import { ProviderPayloadCompactionController } from "./provider-payload-compaction.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -290,6 +291,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	const providerPayloadCompaction = new ProviderPayloadCompactionController(
+		sessionManager,
+		settingsManager,
+		extensionRunnerRef,
+	);
 
 	agent = new Agent({
 		initialState: {
@@ -315,6 +321,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				onPayload: async (payload, payloadModel) => {
+					const transformedPayload = (await options?.onPayload?.(payload, payloadModel)) ?? payload;
+					const runner = extensionRunnerRef.current;
+					if (!runner?.hasHandlers("before_provider_payload")) {
+						return transformedPayload;
+					}
+					const signal = options?.signal ?? new AbortController().signal;
+					const attribution = providerPayloadCompaction.createAttribution(payloadModel, "agent", signal);
+					const result = await runner.emitBeforeProviderPayload(
+						payloadModel,
+						transformedPayload,
+						attribution,
+						signal,
+					);
+					return providerPayloadCompaction.commitPayload(payloadModel, result, attribution);
+				},
 				transformHeaders: async (requestHeaders) => {
 					const headers = mergeProviderAttributionHeaders(
 						model,
@@ -327,13 +349,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						: (headers ?? {});
 				},
 			});
-		},
-		onPayload: async (payload, _model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
-				return payload;
-			}
-			return runner.emitBeforeProviderRequest(payload, "agent");
 		},
 		onResponse: async (response, _model) => {
 			const runner = extensionRunnerRef.current;
@@ -386,6 +401,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
+		providerPayloadCompaction,
 		sessionStartEvent: options.sessionStartEvent,
 	});
 	const extensionsResult = resourceLoader.getExtensions();

@@ -296,7 +296,7 @@ user sends prompt ────────────────────�
   │   ├─► turn_start                               │       │
   │   ├─► context (can modify messages)            │       │
   │   ├─► before_provider_headers (can mutate headers)     |
-  │   ├─► before_provider_request (trusted session/origin; can inspect or replace payload)
+  │   ├─► before_provider_payload (trusted session/origin; can inspect or replace payload)
   │   ├─► after_provider_response (status + headers, before stream consume)
   │   │                                            │       │
   │   │   LLM responds, may call tools:            │       │
@@ -476,7 +476,8 @@ pi.on("session_before_compact", async (event, ctx) => {
 pi.on("session_compact", async (event, ctx) => {
   // event.compactionEntry - the saved compaction
   // event.fromExtension - whether extension provided it
-  // event.reason - "manual" (/compact), "threshold", or "overflow"
+  // event.reason - "manual" | "threshold" | "overflow" | "provider_inline"
+  // event.trigger - same values as event.reason
   // event.willRetry - whether the aborted turn is retried after compaction (overflow recovery)
 });
 ```
@@ -675,33 +676,59 @@ pi.on("before_provider_headers", (event, ctx) => {
 
 Runs once per provider request; retries reuse the same headers rather than re-firing the hook.
 
-#### before_provider_request
+#### before_provider_payload
 
-Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
+Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. To replace it, return an object whose `payload` property contains the replacement for later handlers and the actual request; the object may also include an optional `compaction` proposal.
 
-`event.sessionId` is the non-empty ID supplied by Pi's active `SessionManager`. `event.origin` is a trusted Pi-owned discriminator:
+`event.attribution.sessionId` is the non-empty ID supplied by Pi's active `SessionManager`. `event.attribution.origin` is a trusted Pi-owned discriminator:
 
 - `"agent"` for normal agent turns
 - `"compaction_summary"` for manual, threshold, overflow, and turn-prefix compaction summaries
 - `"branch_summary"` for summaries created while navigating the session tree
 
-Pi does not infer either value from payload content. Auxiliary summaries receive the same payload-replacement semantics as normal agent turns, but do not run agent context hooks or automatic checkpoint replay.
+Pi does not infer either value from payload content. Auxiliary summaries receive the same payload-replacement semantics as normal agent turns, but do not run agent context hooks or inline compaction proposals.
 
-For every origin, `ctx.signal` is the exact abort signal attached to that provider request. Auxiliary
+For every origin, `event.attribution.signal` is the exact abort signal attached to that provider request. Auxiliary
 requests therefore expose their compaction or branch-summary lifecycle signal rather than an unrelated
 agent-run signal.
 
-The new metadata is additive: existing handlers that only inspect or replace `event.payload` keep the same behavior. An extension that depends on attribution must require a Pi version that supplies these fields; it must not treat missing metadata from an older host as an `"agent"` request.
+For agent-origin requests, `event.attribution.compaction` may be present. It contains one Pi-owned
+single-use token plus the candidate leaf and `candidateRetainedTail` for a possible inline
+compaction proposal. A handler may return:
+
+```typescript
+{
+  payload: rewrittenPayload,
+  compaction: {
+    token: event.attribution.compaction.token,
+    summary: "Portable checkpoint summary",
+    tokensBefore: 123456,
+    usage: /* optional Pi Usage */,
+    details: /* optional extension-specific data */,
+  }
+}
+```
+
+Pi validates freshness, rematerializes the retained tail, persists the real compaction entry, emits
+`session_compact`, and only then allows final provider dispatch. Auxiliary requests never receive a
+compaction token. If append or exact readback fails, Pi emits `session_compact_indeterminate` and
+prevents provider dispatch; extensions that maintain replay state must fail closed on that event. A
+`session_compact` handler failure also prevents dispatch, but the already verified commit is not
+reported as indeterminate.
+
+For one compatibility release, coding-agent also accepts payload-rewrite handlers registered on
+`before_provider_request`. Those handlers participate in the same reducer pass but cannot return
+inline compaction proposals. New code should register `before_provider_payload` directly.
 
 This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Pi's system prompt string rather than the final serialized provider payload.
 
 ```typescript
-pi.on("before_provider_request", (event, ctx) => {
-  console.log(event.origin, event.sessionId);
+pi.on("before_provider_payload", (event, ctx) => {
+  console.log(event.attribution.origin, event.attribution.sessionId);
   console.log(JSON.stringify(event.payload, null, 2));
 
   // Optional: replace payload
-  // return { ...event.payload, temperature: 0 };
+  return { payload: { ...event.payload, temperature: 0 } };
 });
 ```
 
@@ -1081,7 +1108,7 @@ Returns Pi's current system prompt string.
 
 - During `before_agent_start`, this reflects chained system-prompt changes made so far for the current turn.
 - It does not include later `context` message mutations.
-- It does not include `before_provider_request` payload rewrites.
+- It does not include `before_provider_payload` payload rewrites.
 - If later-loaded extensions run after yours, they can still change what is ultimately sent.
 
 ```typescript
@@ -1106,7 +1133,7 @@ const contextPaths = options.contextFiles?.map((file) => file.path) ?? [];
 
 This has the same shape and mutability as `before_agent_start` `event.systemPromptOptions`: custom prompt, active tools, tool snippets, prompt guidelines, appended system prompt text, cwd, loaded context files, and loaded skills. It may include full context file contents, so treat it as sensitive extension-local data and avoid exposing it through command lists, logs, or autocomplete metadata.
 
-This reports the current base prompt inputs. It does not include per-turn `before_agent_start` chained system-prompt changes, later `context` event message mutations, or `before_provider_request` payload rewrites.
+This reports the current base prompt inputs. It does not include per-turn `before_agent_start` chained system-prompt changes, later `context` event message mutations, or `before_provider_payload` payload rewrites.
 
 ### ctx.waitForIdle()
 
@@ -2913,7 +2940,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `input-transform.ts` | Transform user input | `on("input")` |
 | `input-transform-streaming.ts` | Streaming-aware input transform | `on("input")`, `streamingBehavior` |
 | `model-status.ts` | React to model changes | `on("model_select")`, `setStatus` |
-| `provider-payload.ts` | Inspect payloads and provider response headers | `on("before_provider_request")`, `on("after_provider_response")` |
+| `provider-payload.ts` | Inspect payloads and provider response headers | `on("before_provider_payload")`, `on("after_provider_response")` |
 | `system-prompt-header.ts` | Display system prompt info | `on("agent_start")`, `getSystemPrompt` |
 | `claude-rules.ts` | Load rules from files | `on("session_start")`, `on("before_agent_start")` |
 | `prompt-customizer.ts` | Add context-aware tool guidance using `systemPromptOptions` | `on("before_agent_start")`, `BuildSystemPromptOptions` |

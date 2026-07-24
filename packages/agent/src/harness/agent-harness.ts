@@ -39,6 +39,8 @@ import type {
 	NavigateTreeResult,
 	PendingSessionWrite,
 	PromptTemplate,
+	ProviderCompactionCommitToken,
+	ProviderPayloadAttribution,
 	Session,
 	Skill,
 } from "./types.ts";
@@ -87,6 +89,52 @@ function findDuplicateNames(names: string[]): string[] {
 		seen.add(name);
 	}
 	return [...duplicates];
+}
+
+class ProviderPayloadReducerError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ProviderPayloadReducerError";
+	}
+}
+
+const providerCompactionTokenRuntimeBrand = Symbol("providerCompactionCommitToken");
+
+interface ProviderInlineCompactionSnapshot {
+	sessionId: string;
+	providerId: string;
+	modelId: string;
+	leafId: string;
+	firstKeptEntryId: string;
+	retainedTail: readonly AgentMessage[];
+	consumed: boolean;
+}
+
+function freezeStructuredValue<T>(value: T): T {
+	const stack: unknown[] = [value];
+	const seen = new Set<object>();
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (typeof current !== "object" || current === null || seen.has(current)) continue;
+		seen.add(current);
+		if (Array.isArray(current)) {
+			for (const item of current) stack.push(item);
+		} else {
+			for (const item of Object.values(current as Record<string, unknown>)) {
+				stack.push(item);
+			}
+		}
+		Object.freeze(current);
+	}
+	return value;
+}
+
+function cloneAndFreezeMessages(messages: readonly AgentMessage[]): readonly AgentMessage[] {
+	return freezeStructuredValue(structuredClone(messages));
+}
+
+function structuralEqual(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function applyStreamOptionsPatch(
@@ -190,6 +238,7 @@ export class AgentHarness<
 	private followUpQueueMode: QueueMode;
 	private nextTurnQueue: AgentMessage[] = [];
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
+	private inlineCompactionSnapshots = new WeakMap<object, ProviderInlineCompactionSnapshot>();
 
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
@@ -229,6 +278,16 @@ export class AgentHarness<
 				throw normalizeHookError(error);
 			}
 		}
+	}
+
+	private async emitTransactionEvent(
+		event: Extract<
+			AgentHarnessOwnEvent<TSkill, TPromptTemplate>,
+			{ type: "session_compact" | "session_compact_indeterminate" }
+		>,
+	): Promise<void> {
+		await this.emitHook(event);
+		await this.emitOwn(event);
 	}
 
 	private async emitAny(event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
@@ -295,21 +354,210 @@ export class AgentHarness<
 		return current;
 	}
 
-	private async emitBeforeProviderPayload(model: Model<any>, payload: unknown): Promise<unknown> {
+	private createProviderPayloadAttribution(
+		model: Model<any>,
+		signal: AbortSignal,
+	): Promise<ProviderPayloadAttribution> {
+		return (async () => {
+			const sessionId = (await this.session.getMetadata()).id;
+			const leafId = await this.session.getLeafId();
+			if (leafId === null) {
+				return { sessionId, origin: "agent", signal };
+			}
+			const preparationResult = prepareCompaction(await this.session.getBranch(), DEFAULT_COMPACTION_SETTINGS);
+			if (!preparationResult.ok) throw preparationResult.error;
+			const preparation = preparationResult.value;
+			if (!preparation) {
+				return { sessionId, origin: "agent", signal };
+			}
+			const token = Object.freeze({
+				[providerCompactionTokenRuntimeBrand]: true,
+			}) as unknown as ProviderCompactionCommitToken;
+			const candidateRetainedTail = cloneAndFreezeMessages(preparation.retainedTail);
+			this.inlineCompactionSnapshots.set(token as object, {
+				sessionId,
+				providerId: model.provider,
+				modelId: model.id,
+				leafId,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				retainedTail: candidateRetainedTail,
+				consumed: false,
+			});
+			return {
+				sessionId,
+				origin: "agent",
+				signal,
+				compaction: Object.freeze({
+					token,
+					candidateLeafId: leafId,
+					candidateRetainedTail,
+				}),
+			};
+		})();
+	}
+
+	private async commitProviderPayloadCompaction(
+		model: Model<any>,
+		payload: unknown,
+		proposal: {
+			token: ProviderCompactionCommitToken;
+			summary: string;
+			tokensBefore: number;
+			usage?: CompactResult["usage"];
+			details?: unknown;
+		},
+		attribution: ProviderPayloadAttribution,
+	): Promise<unknown> {
+		if (attribution.origin !== "agent" || attribution.compaction === undefined) {
+			throw new ProviderPayloadReducerError(
+				"Inline compaction proposals are only allowed for agent-origin provider requests",
+			);
+		}
+		const snapshot = this.inlineCompactionSnapshots.get(proposal.token as object);
+		if (!snapshot) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal used a stale or forged commit token");
+		}
+		if (snapshot.consumed) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal reused a consumed commit token");
+		}
+		if (
+			snapshot.sessionId !== attribution.sessionId ||
+			snapshot.providerId !== model.provider ||
+			snapshot.modelId !== model.id
+		) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal did not match the current request snapshot");
+		}
+		if (attribution.signal.aborted) {
+			throw new ProviderPayloadReducerError("Compaction cancelled");
+		}
+		const currentLeafId = await this.session.getLeafId();
+		if (currentLeafId !== snapshot.leafId) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal became stale before commit");
+		}
+		const preparationResult = prepareCompaction(await this.session.getBranch(), DEFAULT_COMPACTION_SETTINGS);
+		if (!preparationResult.ok) throw preparationResult.error;
+		const preparation = preparationResult.value;
+		if (!preparation) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal no longer matches the active branch");
+		}
+		if (
+			preparation.firstKeptEntryId !== snapshot.firstKeptEntryId ||
+			!structuralEqual(preparation.retainedTail, snapshot.retainedTail)
+		) {
+			throw new ProviderPayloadReducerError("Inline compaction proposal did not match Pi's retained-tail snapshot");
+		}
+		if (typeof proposal.summary !== "string" || proposal.summary.trim().length === 0) {
+			throw new ProviderPayloadReducerError("Inline compaction proposals must include a non-empty summary");
+		}
+		if (
+			typeof proposal.tokensBefore !== "number" ||
+			!Number.isFinite(proposal.tokensBefore) ||
+			proposal.tokensBefore < 0
+		) {
+			throw new ProviderPayloadReducerError(
+				"Inline compaction proposals must include a finite non-negative token count",
+			);
+		}
+		snapshot.consumed = true;
+		const parentId = snapshot.leafId;
+		const tokensBefore = Math.trunc(proposal.tokensBefore);
+		const retainedTail = [...preparation.retainedTail];
+		let entryId: string | undefined;
+		let entry: Awaited<ReturnType<Session["getEntry"]>>;
+		try {
+			entryId = await this.session.appendCompaction(
+				proposal.summary,
+				preparation.firstKeptEntryId,
+				tokensBefore,
+				proposal.details,
+				true,
+				proposal.usage,
+				retainedTail,
+			);
+			entry = await this.session.getEntry(entryId);
+			if (
+				entry?.type !== "compaction" ||
+				entry.id !== entryId ||
+				entry.parentId !== parentId ||
+				entry.summary !== proposal.summary ||
+				entry.firstKeptEntryId !== preparation.firstKeptEntryId ||
+				entry.tokensBefore !== tokensBefore ||
+				!structuralEqual(entry.details, proposal.details) ||
+				!structuralEqual(entry.usage, proposal.usage) ||
+				!structuralEqual(entry.retainedTail, retainedTail)
+			) {
+				throw new ProviderPayloadReducerError("Inline compaction commit could not be verified after append");
+			}
+		} catch (error) {
+			try {
+				await this.emitTransactionEvent({
+					type: "session_compact_indeterminate",
+					...(entryId === undefined ? {} : { entryId }),
+					trigger: "provider_inline",
+				});
+			} catch {
+				// Preserve the original transaction failure.
+			}
+			throw error;
+		}
+		await this.emitTransactionEvent({
+			type: "session_compact",
+			compactionEntry: entry!,
+			fromHook: true,
+			trigger: "provider_inline",
+		});
+		return payload;
+	}
+
+	private async emitBeforeProviderPayload(model: Model<any>, payload: unknown, signal: AbortSignal): Promise<unknown> {
 		const handlers = this.getHandlers("before_provider_payload");
 		let current = payload;
 		if (!handlers || handlers.size === 0) return current;
+		const attribution = await this.createProviderPayloadAttribution(model, signal);
+		let sealedPayload: unknown | undefined;
+		let proposal:
+			| {
+					token: ProviderCompactionCommitToken;
+					summary: string;
+					tokensBefore: number;
+					usage?: CompactResult["usage"];
+					details?: unknown;
+			  }
+			| undefined;
 		for (const handler of handlers) {
 			try {
-				const result = await handler({ type: "before_provider_payload", model, payload: current });
+				const result = await handler({ type: "before_provider_payload", model, payload: current, attribution });
 				if (result !== undefined) {
+					if (sealedPayload !== undefined) {
+						if (!structuralEqual(result.payload, sealedPayload)) {
+							throw new ProviderPayloadReducerError(
+								"Provider payload cannot change after an inline compaction proposal",
+							);
+						}
+						if (result.compaction !== undefined) {
+							throw new ProviderPayloadReducerError(
+								"before_provider_payload may return at most one compaction proposal",
+							);
+						}
+						current = sealedPayload;
+						continue;
+					}
 					current = result.payload;
+					if (result.compaction !== undefined) {
+						sealedPayload = freezeStructuredValue(structuredClone(result.payload));
+						current = sealedPayload;
+						proposal = result.compaction;
+					}
 				}
 			} catch (error) {
+				if (sealedPayload !== undefined || error instanceof ProviderPayloadReducerError) {
+					throw error;
+				}
 				throw normalizeHookError(error);
 			}
 		}
-		return current;
+		if (proposal === undefined) return current;
+		return this.commitProviderPayloadCompaction(model, sealedPayload ?? current, proposal, attribution);
 	}
 
 	private async emitQueueUpdate(): Promise<void> {
@@ -388,7 +636,12 @@ export class AgentHarness<
 				maxRetries: requestOptions.maxRetries,
 				maxRetryDelayMs: requestOptions.maxRetryDelayMs,
 				metadata: requestOptions.metadata,
-				onPayload: async (payload) => await this.emitBeforeProviderPayload(model, payload),
+				onPayload: async (payload) =>
+					await this.emitBeforeProviderPayload(
+						model,
+						payload,
+						streamOptions?.signal ?? new AbortController().signal,
+					),
 				onResponse: async (response) => {
 					const headers = { ...(response.headers as Record<string, string>) };
 					await this.emitOwn(
@@ -756,7 +1009,12 @@ export class AgentHarness<
 			);
 			const entry = await this.session.getEntry(entryId);
 			if (entry?.type === "compaction") {
-				await this.emitOwn({ type: "session_compact", compactionEntry: entry, fromHook: provided !== undefined });
+				await this.emitTransactionEvent({
+					type: "session_compact",
+					compactionEntry: entry,
+					fromHook: provided !== undefined,
+					trigger: "manual",
+				});
 			}
 			return result;
 		} catch (error) {

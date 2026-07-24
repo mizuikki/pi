@@ -53,5 +53,28 @@ export async function getMaterializedBranchPathOrCompaction(
 			throw invalidSession(`invalid entry row for branch entry ${branchRow.entry_id}`);
 		}
 	}
-	return entries;
+	let latestCompactionIndex = -1;
+	for (let index = 0; index < entries.length; index += 1) {
+		if (entries[index]?.type === "compaction") {
+			latestCompactionIndex = index;
+		}
+	}
+	if (latestCompactionIndex < 0) {
+		return entries;
+	}
+	const latestCompaction = entries[latestCompactionIndex];
+	if (latestCompaction?.type !== "compaction") {
+		return entries;
+	}
+	if (latestCompaction.retainedTail) {
+		return entries.slice(latestCompactionIndex);
+	}
+	if (latestCompaction.firstKeptEntryId) {
+		const firstKeptIndex = entries.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId);
+		if (firstKeptIndex >= 0 && firstKeptIndex <= latestCompactionIndex) {
+			return entries.slice(firstKeptIndex);
+		}
+		return entries;
+	}
+	return entries.slice(latestCompactionIndex);
 }

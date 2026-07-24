@@ -159,6 +159,26 @@ describe("SessionManager append and tree traversal", () => {
 			expect(path.map((e) => e.id)).toEqual([id1, id2, id3, id4]);
 		});
 
+		it("reconstructs the full active path after a self-contained compaction boundary", () => {
+			const session = SessionManager.inMemory();
+			const rootId = session.appendMessage(userMsg("root"));
+			const keptId = session.appendMessage(assistantMsg("kept"));
+			const droppedId = session.appendMessage(userMsg("dropped"));
+			const compactionId = session.appendCompaction("summary", keptId, 10, undefined, false, undefined, [
+				assistantMsg("kept"),
+			]);
+			const afterId = session.appendMessage(userMsg("after"));
+
+			expect(session.getFullActivePathSnapshot().map((entry) => entry.id)).toEqual([
+				rootId,
+				keptId,
+				droppedId,
+				compactionId,
+				afterId,
+			]);
+			expect(session.buildContextEntries().map((entry) => entry.id)).toEqual([compactionId, afterId]);
+		});
+
 		it("returns path from specified entry to root", () => {
 			const session = SessionManager.inMemory();
 

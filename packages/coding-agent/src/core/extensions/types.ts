@@ -570,6 +570,8 @@ export interface SessionBeforeSwitchEvent {
 	targetSessionFile?: string;
 }
 
+export type CompactionTrigger = "manual" | "threshold" | "overflow" | "provider_inline";
+
 /** Fired before forking a session (can be cancelled) */
 export interface SessionBeforeForkEvent {
 	type: "session_before_fork";
@@ -584,7 +586,9 @@ export interface SessionBeforeCompactEvent {
 	branchEntries: SessionEntry[];
 	customInstructions?: string;
 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
-	reason: "manual" | "threshold" | "overflow";
+	reason: Exclude<CompactionTrigger, "provider_inline">;
+	/** Public compaction trigger alias for compatibility with provider-inline compaction. */
+	trigger: Exclude<CompactionTrigger, "provider_inline">;
 	/** True when the aborted turn is retried after this compaction (overflow recovery) */
 	willRetry: boolean;
 	signal: AbortSignal;
@@ -595,10 +599,19 @@ export interface SessionCompactEvent {
 	type: "session_compact";
 	compactionEntry: CompactionEntry;
 	fromExtension: boolean;
-	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
-	reason: "manual" | "threshold" | "overflow";
+	/** What triggered the compaction: manual /compact, the context threshold, overflow recovery, or provider-inline commit. */
+	reason: CompactionTrigger;
+	/** Public compaction trigger. */
+	trigger: CompactionTrigger;
 	/** True when the aborted turn is retried after this compaction (overflow recovery) */
 	willRetry: boolean;
+}
+
+/** Fired when an inline compaction append may have committed but cannot be verified. */
+export interface SessionCompactIndeterminateEvent {
+	type: "session_compact_indeterminate";
+	entryId?: string;
+	trigger: "provider_inline";
 }
 
 /** Fired before an extension runtime is torn down due to quit, reload, or session replacement. */
@@ -647,6 +660,7 @@ export type SessionEvent =
 	| SessionBeforeForkEvent
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
+	| SessionCompactIndeterminateEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent;
@@ -664,6 +678,31 @@ export interface ContextEvent {
 /** Trusted origin of a provider request issued by the active Pi session. */
 export type ProviderRequestOrigin = "agent" | "compaction_summary" | "branch_summary";
 
+export declare const providerCompactionTokenBrand: unique symbol;
+
+export interface ProviderCompactionCommitToken {
+	readonly [providerCompactionTokenBrand]: true;
+}
+
+export interface ProviderPayloadAttribution {
+	sessionId: string;
+	origin: ProviderRequestOrigin;
+	signal: AbortSignal;
+	compaction?: {
+		token: ProviderCompactionCommitToken;
+		candidateLeafId: string;
+		candidateRetainedTail: readonly AgentMessage[];
+	};
+}
+
+export interface ProviderCompactionProposal {
+	token: ProviderCompactionCommitToken;
+	summary: string;
+	tokensBefore: number;
+	usage?: Usage;
+	details?: unknown;
+}
+
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
@@ -672,6 +711,14 @@ export interface BeforeProviderRequestEvent {
 	sessionId: string;
 	/** Pi-owned request origin. Extensions must not infer this from payload content. */
 	origin: ProviderRequestOrigin;
+}
+
+/** Fired before a provider request payload is dispatched. Can replace the payload and propose an inline compaction commit. */
+export interface BeforeProviderPayloadEvent {
+	type: "before_provider_payload";
+	model: Model<any>;
+	payload: unknown;
+	attribution: ProviderPayloadAttribution;
 }
 
 /**
@@ -1032,6 +1079,7 @@ export type ExtensionEvent =
 	| ResourcesDiscoverEvent
 	| SessionEvent
 	| ContextEvent
+	| BeforeProviderPayloadEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
 	| AfterProviderResponseEvent
@@ -1125,6 +1173,11 @@ export interface SessionBeforeTreeResult {
 	label?: string;
 }
 
+export interface BeforeProviderPayloadEventResult {
+	payload: unknown;
+	compaction?: ProviderCompactionProposal;
+}
+
 // ============================================================================
 // Message and Entry Rendering
 // ============================================================================
@@ -1195,6 +1248,7 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
 	): void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
+	on(event: "session_compact_indeterminate", handler: ExtensionHandler<SessionCompactIndeterminateEvent>): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
@@ -1202,6 +1256,10 @@ export interface ExtensionAPI {
 	on(
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
+	): void;
+	on(
+		event: "before_provider_payload",
+		handler: ExtensionHandler<BeforeProviderPayloadEvent, BeforeProviderPayloadEventResult>,
 	): void;
 	on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;

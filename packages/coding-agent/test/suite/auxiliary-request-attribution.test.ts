@@ -109,6 +109,7 @@ describe("provider request attribution", () => {
 			firstKeptEntryId: "entry-keep",
 			messagesToSummarize: [message],
 			turnPrefixMessages: [message],
+			retainedTail: [message],
 			isSplitTurn: true,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },

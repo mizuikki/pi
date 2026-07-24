@@ -19,6 +19,7 @@ import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-sessi
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
+import { ProviderPayloadCompactionController } from "../../src/core/provider-payload-compaction.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
@@ -110,6 +111,11 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 
 	const sessionManager = SessionManager.inMemory();
 	const settingsManager = SettingsManager.inMemory(options.settings);
+	const providerPayloadCompaction = new ProviderPayloadCompactionController(
+		sessionManager,
+		settingsManager,
+		extensionRunnerRef,
+	);
 
 	const authStorage = AuthStorage.inMemory();
 	if (withConfiguredAuth) {
@@ -144,12 +150,15 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			tools: [],
 		},
 		convertToLlm,
-		onPayload: async (payload) => {
+		onPayload: async (payload, model) => {
 			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
+			if (!runner?.hasHandlers("before_provider_payload")) {
 				return payload;
 			}
-			return runner.emitBeforeProviderRequest(payload, "agent");
+			const signal = new AbortController().signal;
+			const attribution = providerPayloadCompaction.createAttribution(model, "agent", signal);
+			const result = await runner.emitBeforeProviderPayload(model, payload, attribution, signal);
+			return providerPayloadCompaction.commitPayload(model, result, attribution);
 		},
 		onResponse: async (response) => {
 			const runner = extensionRunnerRef.current;
@@ -187,6 +196,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		allowedToolNames: options.allowedToolNames,
 		excludedToolNames: options.excludedToolNames,
 		extensionRunnerRef,
+		providerPayloadCompaction,
 	});
 
 	const events: AgentSessionEvent[] = [];

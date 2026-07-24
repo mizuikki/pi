@@ -133,8 +133,24 @@ export class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadat
 			if (stopAtEntryId !== null && current.id === stopAtEntryId) break;
 			if (current.type === "compaction") {
 				if (current.retainedTail) break;
-				stopAtEntryId = current.firstKeptEntryId ?? null;
+				if (current.firstKeptEntryId === undefined) break;
+				stopAtEntryId = current.firstKeptEntryId;
 			}
+			if (!current.parentId) break;
+			const parent = await this.getEntry(current.parentId);
+			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
+			current = parent;
+		}
+		return path;
+	}
+
+	private async getPathToRootEntries(leafId: string | null): Promise<SessionTreeEntry[]> {
+		if (leafId === null) return [];
+		const path: SessionTreeEntry[] = [];
+		let current = await this.getEntry(leafId);
+		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
+		while (current) {
+			path.unshift(current);
 			if (!current.parentId) break;
 			const parent = await this.getEntry(current.parentId);
 			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
@@ -405,6 +421,10 @@ export class SqliteSessionStorage implements SessionStorage<SqliteSessionMetadat
 			return getMaterializedBranchPathOrCompaction(this.db, this.metadata.id, this.activeBranchId, this.byId);
 		}
 		return this.getPathToRootOrCompactionEntries(leafId);
+	}
+
+	async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
+		return this.getPathToRootEntries(leafId);
 	}
 
 	async getEntries(options?: SessionEntryCursorOptions): Promise<SessionTreeEntry[]> {

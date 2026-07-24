@@ -98,6 +98,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+import { ProviderPayloadCompactionController } from "./provider-payload-compaction.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -221,6 +222,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** Shared provider-payload compaction transaction controller. */
+	providerPayloadCompaction?: ProviderPayloadCompactionController;
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
 }
@@ -348,6 +351,7 @@ export class AgentSession {
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
+	private _providerPayloadCompaction: ProviderPayloadCompactionController;
 	private _initialActiveToolNames?: string[];
 	private _allowedToolNames?: Set<string>;
 	private _excludedToolNames?: Set<string>;
@@ -384,7 +388,10 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
-		this._extensionRunnerRef = config.extensionRunnerRef;
+		this._extensionRunnerRef = config.extensionRunnerRef ?? {};
+		this._providerPayloadCompaction =
+			config.providerPayloadCompaction ??
+			new ProviderPayloadCompactionController(this.sessionManager, this.settingsManager, this._extensionRunnerRef);
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
@@ -474,10 +481,13 @@ export class AgentSession {
 				onPayload: async (payload, model) => {
 					const transformedPayload = (await options?.onPayload?.(payload, model)) ?? payload;
 					const runner = this._extensionRunner;
-					if (!runner.hasHandlers("before_provider_request")) {
+					if (!runner.hasHandlers("before_provider_payload")) {
 						return transformedPayload;
 					}
-					return runner.emitBeforeProviderRequest(transformedPayload, origin, options?.signal);
+					const signal = options?.signal ?? new AbortController().signal;
+					const attribution = this._providerPayloadCompaction.createAttribution(model, origin, signal);
+					const result = await runner.emitBeforeProviderPayload(model, transformedPayload, attribution, signal);
+					return this._providerPayloadCompaction.commitPayload(model, result, attribution);
 				},
 			});
 	}
@@ -1873,6 +1883,7 @@ export class AgentSession {
 					branchEntries: pathEntries,
 					customInstructions,
 					reason: "manual",
+					trigger: "manual",
 					willRetry: false,
 					signal: this._compactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
@@ -1892,6 +1903,7 @@ export class AgentSession {
 			let tokensBefore: number;
 			let usage: Usage | undefined;
 			let details: unknown;
+			let retainedTail: AgentMessage[] | undefined;
 
 			if (extensionCompaction) {
 				// Extension provided compaction content
@@ -1900,6 +1912,7 @@ export class AgentSession {
 				tokensBefore = extensionCompaction.tokensBefore;
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
+				retainedTail = extensionCompaction.retainedTail;
 			} else {
 				// Generate compaction result
 				const result = await compact(
@@ -1920,6 +1933,7 @@ export class AgentSession {
 				tokensBefore = result.tokensBefore;
 				usage = result.usage;
 				details = result.details;
+				retainedTail = result.retainedTail;
 			}
 
 			if (this._compactionAbortController.signal.aborted) {
@@ -1933,6 +1947,7 @@ export class AgentSession {
 				details,
 				fromExtension,
 				usage,
+				retainedTail,
 			);
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -1947,6 +1962,7 @@ export class AgentSession {
 					compactionEntry: savedCompactionEntry,
 					fromExtension,
 					reason: "manual",
+					trigger: "manual",
 					willRetry: false,
 				});
 			}
@@ -1957,6 +1973,7 @@ export class AgentSession {
 				tokensBefore,
 				estimatedTokensAfter,
 				usage,
+				retainedTail,
 				details,
 			};
 			this._emit({
@@ -2148,6 +2165,7 @@ export class AgentSession {
 					branchEntries: pathEntries,
 					customInstructions: undefined,
 					reason,
+					trigger: reason,
 					willRetry,
 					signal: this._autoCompactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
@@ -2174,6 +2192,7 @@ export class AgentSession {
 			let tokensBefore: number;
 			let usage: Usage | undefined;
 			let details: unknown;
+			let retainedTail: AgentMessage[] | undefined;
 
 			if (extensionCompaction) {
 				// Extension provided compaction content
@@ -2182,6 +2201,7 @@ export class AgentSession {
 				tokensBefore = extensionCompaction.tokensBefore;
 				usage = extensionCompaction.usage;
 				details = extensionCompaction.details;
+				retainedTail = extensionCompaction.retainedTail;
 			} else {
 				// Generate compaction result
 				const compactResult = await compact(
@@ -2202,6 +2222,7 @@ export class AgentSession {
 				tokensBefore = compactResult.tokensBefore;
 				usage = compactResult.usage;
 				details = compactResult.details;
+				retainedTail = compactResult.retainedTail;
 			}
 
 			if (this._autoCompactionAbortController.signal.aborted) {
@@ -2222,6 +2243,7 @@ export class AgentSession {
 				details,
 				fromExtension,
 				usage,
+				retainedTail,
 			);
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2236,6 +2258,7 @@ export class AgentSession {
 					compactionEntry: savedCompactionEntry,
 					fromExtension,
 					reason,
+					trigger: reason,
 					willRetry,
 				});
 			}
@@ -2246,6 +2269,7 @@ export class AgentSession {
 				tokensBefore,
 				estimatedTokensAfter,
 				usage,
+				retainedTail,
 				details,
 			};
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });

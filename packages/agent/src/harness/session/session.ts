@@ -181,6 +181,19 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage.getPathToRootOrCompaction(leafId);
 	}
 
+	async getFullBranch(fromId?: string): Promise<SessionTreeEntry[]> {
+		const leafId = fromId ?? (await this.storage.getLeafId());
+		return this.storage.getPathToRoot(leafId);
+	}
+
+	/**
+	 * Read-only full active-path snapshot that continues through self-contained
+	 * compaction boundaries. Normal getBranch() remains checkpoint-bounded.
+	 */
+	async getFullActivePathSnapshot(fromId?: string): Promise<SessionTreeEntry[]> {
+		return this.getFullBranch(fromId);
+	}
+
 	async buildContextEntries(options: SessionContextBuildOptions = {}): Promise<SessionTreeEntry[]> {
 		return buildContextEntries(await this.getBranch(), this.mergeContextBuildOptions(options));
 	}
