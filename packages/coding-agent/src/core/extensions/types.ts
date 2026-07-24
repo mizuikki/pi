@@ -1230,6 +1230,12 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
  * ExtensionAPI passed to extension factory functions.
  */
 export interface ExtensionAPI {
+	/**
+	 * Version of the atomic before_provider_payload compaction transaction exposed by this host.
+	 * Extensions must fail closed when they require a newer transaction contract.
+	 */
+	readonly providerPayloadCompactionApiVersion: 1;
+
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================

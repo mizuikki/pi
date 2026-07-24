@@ -234,6 +234,10 @@ function createExtensionAPI(
 	eventBus: EventBus,
 ): ExtensionAPI {
 	const api = {
+		// This is intentionally part of the runtime API rather than package-version detection:
+		// a fork can preserve package versions while extending the extension contract.
+		providerPayloadCompactionApiVersion: 1 as const,
+
 		// Registration methods - write to extension
 		on(event: string, handler: HandlerFn): void {
 			runtime.assertActive();
