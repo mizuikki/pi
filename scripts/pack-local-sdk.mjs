@@ -109,7 +109,7 @@ function packageManifestEntry(tarballDirectory, tarball) {
 	if (!expectedPackageNames.includes(packageJson.name)) {
 		throw new Error(`Unexpected SDK package in tarball: ${packageJson.name}`);
 	}
-	if (packageJson.version !== "0.81.1-local.1") {
+	if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
 		throw new Error(`SDK package has unexpected version: ${packageJson.name}@${packageJson.version}`);
 	}
 	return {
@@ -129,6 +129,10 @@ function main() {
 
 	const commit = output("git", ["-C", repositoryRoot, "rev-parse", "--verify", `${ref}^{commit}`]);
 	if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("--ref must resolve to an immutable commit");
+	const head = output("git", ["-C", repositoryRoot, "rev-parse", "HEAD"]);
+	if (head !== commit) {
+		throw new Error("--ref must match HEAD because generated model data is sourced from the current checkout");
+	}
 	ensureEmptyOutputDirectory(out);
 
 	const temporaryDirectory = mkdtempSync(join(tmpdir(), "pi-local-sdk-"));
@@ -154,9 +158,18 @@ function main() {
 		if (JSON.stringify(packages.map((entry) => entry.name)) !== JSON.stringify([...expectedPackageNames].sort())) {
 			throw new Error("SDK manifest does not contain exactly the four public Pi packages");
 		}
+		const sdkVersion = packages[0]?.version;
+		if (
+			typeof sdkVersion !== "string" ||
+			!sdkVersion.includes("-local.") ||
+			packages.some((entry) => entry.version !== sdkVersion)
+		) {
+			throw new Error("SDK packages must share one private local version");
+		}
 		const manifest = {
 			schemaVersion: 1,
 			forkCommit: commit,
+			sdkVersion,
 			generatedBy: "scripts/pack-local-sdk.mjs",
 			capabilities: {
 				modelRuntimeApiVersion: 1,
