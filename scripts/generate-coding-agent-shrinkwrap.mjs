@@ -48,6 +48,7 @@ function sortedPackageEntry(entry) {
 		"integrity",
 		"license",
 		"dependencies",
+		"bundleDependencies",
 		"optionalDependencies",
 		"peerDependencies",
 		"peerDependenciesMeta",
@@ -57,6 +58,7 @@ function sortedPackageEntry(entry) {
 		"cpu",
 		"libc",
 		"optional",
+		"inBundle",
 		"hasInstallScript",
 		"deprecated",
 		"funding",
@@ -93,6 +95,7 @@ function copyPackageJsonEntry(packageJson, options) {
 	for (const field of [
 		"license",
 		"dependencies",
+		"bundleDependencies",
 		"optionalDependencies",
 		"peerDependencies",
 		"peerDependenciesMeta",
@@ -192,11 +195,15 @@ function resolveExternalDependency(lockPackages, packageName, fromLockPath) {
 	);
 }
 
-function addInternalWorkspace(shrinkwrapPackages, addedPaths, queue, name, workspace) {
+function addInternalWorkspace(shrinkwrapPackages, addedPaths, queue, name, workspace, bundledDependencies) {
 	const packageJson = workspace.packageJson;
 	const outputPath = `node_modules/${name}`;
 	const entry = copyPackageJsonEntry(packageJson, { includeName: false });
-	entry.resolved = registryTarballUrl(name, packageJson.version);
+	if (bundledDependencies.has(name)) {
+		entry.inBundle = true;
+	} else {
+		entry.resolved = registryTarballUrl(name, packageJson.version);
+	}
 
 	shrinkwrapPackages[outputPath] = sortedPackageEntry(entry);
 	addedPaths.add(outputPath);
@@ -221,7 +228,7 @@ function addExternalPackage(lockPackages, shrinkwrapPackages, addedPaths, queue,
 	}
 }
 
-function validateShrinkwrap(shrinkwrap, internalNames) {
+function validateShrinkwrap(shrinkwrap, internalNames, bundledDependencies) {
 	const errors = [];
 	const includedPaths = new Set(Object.keys(shrinkwrap.packages));
 	const includedPackageNames = new Set();
@@ -234,6 +241,14 @@ function validateShrinkwrap(shrinkwrap, internalNames) {
 		}
 		if (entry.link) {
 			errors.push(`${lockPath} is a link entry`);
+		}
+		if (packageName && internalNames.has(packageName) && bundledDependencies.has(packageName)) {
+			if (entry.inBundle !== true) {
+				errors.push(`${lockPath} must mark the private SDK dependency as bundled`);
+			}
+			if (entry.resolved !== undefined) {
+				errors.push(`${lockPath} must not resolve a private SDK dependency from a registry`);
+			}
 		}
 		if (typeof entry.resolved === "string" && /^(file:|link:|workspace:|\.\.?\/|\/)/.test(entry.resolved)) {
 			errors.push(`${lockPath} has a local resolved value: ${entry.resolved}`);
@@ -295,6 +310,7 @@ function generateShrinkwrap() {
 
 	const lockPackages = rootLock.packages;
 	const codingAgentPackage = readJson(join(codingAgentDir, "package.json"));
+	const bundledDependencies = new Set(codingAgentPackage.bundleDependencies ?? []);
 	const internalWorkspaces = getInternalWorkspaces(lockPackages);
 	const shrinkwrapPackages = {
 		"": copyPackageJsonEntry(codingAgentPackage, { includeName: true }),
@@ -314,7 +330,7 @@ function generateShrinkwrap() {
 			const outputPath = `node_modules/${item.name}`;
 			internalNames.add(item.name);
 			if (!addedPaths.has(outputPath)) {
-				addInternalWorkspace(shrinkwrapPackages, addedPaths, queue, item.name, workspace);
+				addInternalWorkspace(shrinkwrapPackages, addedPaths, queue, item.name, workspace, bundledDependencies);
 			}
 			continue;
 		}
@@ -330,7 +346,7 @@ function generateShrinkwrap() {
 		packages: sortedObject(shrinkwrapPackages),
 	};
 
-	validateShrinkwrap(shrinkwrap, internalNames);
+	validateShrinkwrap(shrinkwrap, internalNames, bundledDependencies);
 	return shrinkwrap;
 }
 

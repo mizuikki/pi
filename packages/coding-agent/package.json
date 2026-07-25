@@ -58,6 +58,11 @@
 		"undici": "8.5.0",
 		"yaml": "2.9.0"
 	},
+	"bundleDependencies": [
+		"@earendil-works/pi-agent-core",
+		"@earendil-works/pi-ai",
+		"@earendil-works/pi-tui"
+	],
 	"overrides": {
 		"rimraf": "6.1.2",
 		"gaxios": {
