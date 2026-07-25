@@ -11,6 +11,7 @@ const expectedPackageNames = new Set([
 	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-coding-agent",
 ]);
+const sortedExpectedPackageNames = [...expectedPackageNames].sort();
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function npmCommand() {
@@ -32,8 +33,9 @@ export function readLocalSdkManifest(manifestPath) {
 	) {
 		throw new Error(`Invalid Pi SDK manifest: ${absoluteManifestPath}`);
 	}
-	if (manifest.packages.length !== expectedPackageNames.size) {
-		throw new Error("Pi SDK manifest must contain exactly four packages");
+	const manifestPackageNames = manifest.packages.map((entry) => entry?.name).sort();
+	if (JSON.stringify(manifestPackageNames) !== JSON.stringify(sortedExpectedPackageNames)) {
+		throw new Error("Pi SDK manifest must contain exactly the four expected packages");
 	}
 
 	const manifestDirectory = resolve(absoluteManifestPath, "..");

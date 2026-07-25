@@ -202,6 +202,9 @@ function addInternalWorkspace(shrinkwrapPackages, addedPaths, queue, name, works
 	if (bundledDependencies.has(name)) {
 		entry.inBundle = true;
 	} else {
+		if (packageJson.version.includes("-local.")) {
+			throw new Error(`Local internal workspace ${name}@${packageJson.version} must be bundled by pi-coding-agent`);
+		}
 		entry.resolved = registryTarballUrl(name, packageJson.version);
 	}
 
