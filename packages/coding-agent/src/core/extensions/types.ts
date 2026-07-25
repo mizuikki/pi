@@ -1231,6 +1231,12 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
  */
 export interface ExtensionAPI {
 	/**
+	 * Version of the common extension SDK contract exposed by this host.
+	 * Private extensions must fail closed when this version differs.
+	 */
+	readonly extensionSdkApiVersion: 1;
+
+	/**
 	 * Version of the ModelRuntime and ModelRegistry contract exposed to extensions.
 	 * Extensions that depend on fork-only runtime behavior must fail closed when it differs.
 	 */

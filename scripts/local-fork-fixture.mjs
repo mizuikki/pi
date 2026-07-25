@@ -29,6 +29,7 @@ export function readLocalSdkManifest(manifestPath) {
 	if (
 		manifest.schemaVersion !== 1 ||
 		typeof manifest.sdkVersion !== "string" ||
+		manifest.capabilities?.extensionSdkApiVersion !== 1 ||
 		!Array.isArray(manifest.packages)
 	) {
 		throw new Error(`Invalid Pi SDK manifest: ${absoluteManifestPath}`);

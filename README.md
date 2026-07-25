@@ -63,8 +63,10 @@ npm run check         # Lint, format, and type check
 
 This checkout is the private host for the sibling `pi-mcp-adapter`,
 `pi-dynamic-workflows`, and `pi-codex-adaptor` extensions. The public SDK
-workspaces use `0.81.1-local.1`; extensions must use that exact version as a
-peer dependency and use `file:../pi/packages/...` only for development.
+workspaces share a product version, but extension compatibility is defined by
+`ExtensionAPI.extensionSdkApiVersion`, currently `1`. Extensions use wildcard
+Pi peer dependencies, validate the runtime API version before registering
+anything, and use `file:../pi/packages/...` only for sibling development.
 
 Install extensions from their source directories, never from the package
 registry:
@@ -83,6 +85,9 @@ digests from that manifest; tarball filenames and `import.meta.resolve()` do
 not verify the Pi loader's runtime aliases. The generator creates
 `<temp>/pi`; extension fixtures create their project copy at `<temp>/project`
 so `file:../pi/...` development dependencies resolve before installation.
+Blocking extension CI consumes an immutable `pi-extension-sdk-v<major>.<minor>.<patch>`
+tag. The manifest's resolved commit and SHA-256 values remain the provenance
+source; the tag and Pi package version are not substitutes for those checks.
 
 ## Building standalone binaries from release source
 

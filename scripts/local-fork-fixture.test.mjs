@@ -15,6 +15,7 @@ test("readLocalSdkManifest rejects duplicate SDK package names", () => {
 			JSON.stringify({
 				schemaVersion: 1,
 				sdkVersion: "0.81.1-local.1",
+				capabilities: { extensionSdkApiVersion: 1 },
 				packages: [
 					{ name: "@earendil-works/pi-ai" },
 					{ name: "@earendil-works/pi-ai" },
@@ -25,6 +26,27 @@ test("readLocalSdkManifest rejects duplicate SDK package names", () => {
 		);
 
 		assert.throws(() => readLocalSdkManifest(manifestPath), /exactly the four expected packages/);
+	} finally {
+		rmSync(directory, { force: true, recursive: true });
+	}
+});
+
+test("readLocalSdkManifest rejects an incompatible extension SDK contract", () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-sdk-manifest-test-"));
+	const manifestPath = join(directory, "pi-sdk-manifest.json");
+
+	try {
+		writeFileSync(
+			manifestPath,
+			JSON.stringify({
+				schemaVersion: 1,
+				sdkVersion: "0.81.1-local.1",
+				capabilities: { extensionSdkApiVersion: 2 },
+				packages: [],
+			}),
+		);
+
+		assert.throws(() => readLocalSdkManifest(manifestPath), /Invalid Pi SDK manifest/);
 	} finally {
 		rmSync(directory, { force: true, recursive: true });
 	}

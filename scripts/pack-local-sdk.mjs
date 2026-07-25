@@ -163,6 +163,7 @@ function main() {
 			sdkVersion,
 			generatedBy: "scripts/pack-local-sdk.mjs",
 			capabilities: {
+				extensionSdkApiVersion: 1,
 				modelRuntimeApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
 			},
