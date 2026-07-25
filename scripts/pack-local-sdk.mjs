@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,15 +74,6 @@ function ensureEmptyOutputDirectory(outputDirectory) {
 	mkdirSync(outputDirectory, { recursive: true });
 }
 
-function copyModelData(sourceRoot, archivedRoot) {
-	const sourceDirectory = join(sourceRoot, "packages/ai/src/providers/data");
-	const destinationDirectory = join(archivedRoot, "packages/ai/src/providers/data");
-	if (!existsSync(sourceDirectory)) {
-		throw new Error(`Generated AI model data is missing: ${sourceDirectory}`);
-	}
-	cpSync(sourceDirectory, destinationDirectory, { recursive: true });
-}
-
 function packWorkspace(archivedRoot, tarballDirectory, workspace) {
 	const workspaceDirectory = join(archivedRoot, "packages", workspace);
 	const packed = JSON.parse(
@@ -144,10 +135,10 @@ function main() {
 		mkdirSync(tarballDirectory, { recursive: true });
 		run("git", ["-C", repositoryRoot, "archive", "--format=tar", "--output", archivePath, commit]);
 		run("tar", ["-xf", archivePath, "-C", archivedRoot]);
-		copyModelData(repositoryRoot, archivedRoot);
 
 		const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 		run(npm, ["ci", "--ignore-scripts", "--prefix", archivedRoot]);
+		run(npm, ["run", "generate:models", "--prefix", archivedRoot]);
 		for (const workspace of workspaceDirectories) {
 			run(npm, ["run", workspace === "ai" ? "build:offline" : "build", "--prefix", join(archivedRoot, "packages", workspace)]);
 		}
