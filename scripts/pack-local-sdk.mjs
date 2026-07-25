@@ -92,7 +92,8 @@ function packWorkspace(archivedRoot, tarballDirectory, workspace) {
 			{ cwd: workspaceDirectory, encoding: "utf8" },
 		),
 	);
-	const filename = packed[0]?.filename;
+	const result = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
+	const filename = result?.filename;
 	if (typeof filename !== "string") throw new Error(`npm pack returned no filename for ${workspace}`);
 	return join(tarballDirectory, filename);
 }
