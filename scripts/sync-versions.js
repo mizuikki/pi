@@ -51,7 +51,7 @@ for (const pkg of packages) {
 				continue;
 			}
 
-			const newVersion = `^${dependencyVersion}`;
+			const newVersion = dependencyVersion.includes("-") ? dependencyVersion : `^${dependencyVersion}`;
 			if (currentVersion === newVersion) {
 				continue;
 			}

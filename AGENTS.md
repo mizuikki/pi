@@ -1,5 +1,36 @@
 # Development Rules
 
+## Local Fork Extensions
+
+- The sibling extensions `pi-mcp-adapter`, `pi-dynamic-workflows`, and
+  `pi-codex-adaptor` target this private Pi fork. Pi package versions are
+  product/build metadata, not the extension compatibility identity.
+- `ExtensionAPI.extensionSdkApiVersion` is the common extension ABI contract.
+  Keep it stable across compatible Pi upgrades and increment it only for an
+  incompatible common extension API change. Feature capabilities remain
+  independently versioned.
+- Extension imports of `@earendil-works/pi-*` are wildcard peers at runtime and
+  local `file:../pi/packages/...` development dependencies only. Every private
+  extension must preflight `extensionSdkApiVersion` before registration. Do not
+  add Pi SDK packages as extension production dependencies or import Pi source
+  paths.
+- Generate isolated SDK inputs with `scripts/pack-local-sdk.mjs`. Positive
+  consumers must install all four manifest tarballs as direct dependencies and
+  verify SHA-256 values from `pi-sdk-manifest.json`; never infer provenance from
+  tarball filenames.
+- Fixture roots are system temporary directories made by `mkdtemp`, with
+  `<temp>/pi` for the archived SDK checkout and `<temp>/project` for the
+  extension copy. Do not use a repository-local temporary directory or a
+  divergent `pi-fork` layout.
+- Fork-only extension behavior needs an `ExtensionAPI` runtime capability
+  preflight. Validate static import aliasing through the real Pi loader with a
+  poison-package fixture; `import.meta.resolve()` does not represent Jiti alias
+  resolution.
+- Blocking compatibility CI uses an immutable protected
+  `pi-extension-sdk-v<major>.<minor>.<patch>` tag. A branch ref is allowed only
+  while coordinating stacked migration PRs and must not be reported as final
+  acceptance. Manifest commits and SHA-256 digests remain authoritative.
+
 ## Conversational Style
 
 - Keep answers short and concise

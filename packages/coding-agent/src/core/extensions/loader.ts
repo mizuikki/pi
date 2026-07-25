@@ -234,6 +234,12 @@ function createExtensionAPI(
 	eventBus: EventBus,
 ): ExtensionAPI {
 	const api = {
+		// Private extensions use this common runtime contract instead of package versions.
+		extensionSdkApiVersion: 1 as const,
+
+		// Feature-specific contracts remain independently versioned.
+		modelRuntimeApiVersion: 1 as const,
+
 		// This is intentionally part of the runtime API rather than package-version detection:
 		// a fork can preserve package versions while extending the extension contract.
 		providerPayloadCompactionApiVersion: 1 as const,
