@@ -234,6 +234,9 @@ function createExtensionAPI(
 	eventBus: EventBus,
 ): ExtensionAPI {
 	const api = {
+		// Fork-only extensions use this runtime contract instead of package versions.
+		modelRuntimeApiVersion: 1 as const,
+
 		// This is intentionally part of the runtime API rather than package-version detection:
 		// a fork can preserve package versions while extending the extension contract.
 		providerPayloadCompactionApiVersion: 1 as const,

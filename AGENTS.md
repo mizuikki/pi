@@ -1,5 +1,27 @@
 # Development Rules
 
+## Local Fork Extensions
+
+- The sibling extensions `pi-mcp-adapter`, `pi-dynamic-workflows`, and
+  `pi-codex-adaptor` target this private Pi fork. The public SDK workspace
+  version is `0.81.1-local.1`; update it and all direct internal Pi dependency
+  specifiers together when an extension-facing ABI changes.
+- Extension imports of `@earendil-works/pi-*` are peers at runtime and local
+  `file:../pi/packages/...` development dependencies only. Do not add Pi SDK
+  packages as extension production dependencies or import Pi source paths.
+- Generate isolated SDK inputs with `scripts/pack-local-sdk.mjs`. Positive
+  consumers must install all four manifest tarballs as direct dependencies and
+  verify SHA-256 values from `pi-sdk-manifest.json`; never infer provenance from
+  tarball filenames.
+- Fixture roots are system temporary directories made by `mkdtemp`, with
+  `<temp>/pi` for the archived SDK checkout and `<temp>/project` for the
+  extension copy. Do not use a repository-local temporary directory or a
+  divergent `pi-fork` layout.
+- Fork-only extension behavior needs an `ExtensionAPI` runtime capability
+  preflight. Validate static import aliasing through the real Pi loader with a
+  poison-package fixture; `import.meta.resolve()` does not represent Jiti alias
+  resolution.
+
 ## Conversational Style
 
 - Keep answers short and concise
