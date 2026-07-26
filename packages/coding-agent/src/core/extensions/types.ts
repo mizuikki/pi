@@ -1153,10 +1153,21 @@ export interface SessionBeforeForkResult {
 	skipConversationRestore?: boolean;
 }
 
-export interface SessionBeforeCompactResult {
-	cancel?: boolean;
-	compaction?: CompactionResult;
-}
+/**
+ * An extension may either cancel/provide a compaction result, or terminate the attempt with a
+ * bounded error that AgentSession renders through its normal compaction lifecycle.
+ */
+export type SessionBeforeCompactResult =
+	| {
+			cancel: true;
+			errorMessage?: string;
+			compaction?: never;
+	  }
+	| {
+			cancel?: false;
+			errorMessage?: never;
+			compaction?: CompactionResult;
+	  };
 
 export interface SessionBeforeTreeResult {
 	cancel?: boolean;
@@ -1247,6 +1258,12 @@ export interface ExtensionAPI {
 	 * Extensions must fail closed when they require a newer transaction contract.
 	 */
 	readonly providerPayloadCompactionApiVersion: 1;
+
+	/**
+	 * Version of the terminal extension compaction failure result contract.
+	 * Extensions must fail closed when they require this result handling.
+	 */
+	readonly compactionFailureResultApiVersion: 1;
 
 	// =========================================================================
 	// Event Subscription

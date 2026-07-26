@@ -18,5 +18,6 @@ describe("ExtensionAPI capabilities", () => {
 		expect(api?.extensionSdkApiVersion).toBe(1);
 		expect(api?.modelRuntimeApiVersion).toBe(1);
 		expect(api?.providerPayloadCompactionApiVersion).toBe(1);
+		expect(api?.compactionFailureResultApiVersion).toBe(1);
 	});
 });
