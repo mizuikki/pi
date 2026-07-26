@@ -111,6 +111,22 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
 
+const MAX_EXTENSION_COMPACTION_ERROR_CHARS = 4000;
+
+function extensionCompactionFailureMessage(result: SessionBeforeCompactResult | undefined): string | undefined {
+	if (result?.errorMessage === undefined) return undefined;
+	if (
+		result.cancel !== true ||
+		result.compaction !== undefined ||
+		typeof result.errorMessage !== "string" ||
+		result.errorMessage.trim().length === 0 ||
+		result.errorMessage.length > MAX_EXTENSION_COMPACTION_ERROR_CHARS
+	) {
+		return "Extension compaction failure result is invalid";
+	}
+	return result.errorMessage;
+}
+
 // ============================================================================
 // Skill Block Parsing
 // ============================================================================
@@ -1887,6 +1903,10 @@ export class AgentSession {
 					willRetry: false,
 					signal: this._compactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
+				const failureMessage = extensionCompactionFailureMessage(result);
+				if (failureMessage !== undefined) {
+					throw new Error(failureMessage);
+				}
 
 				if (result?.cancel) {
 					throw new Error("Compaction cancelled");
@@ -2169,6 +2189,10 @@ export class AgentSession {
 					willRetry,
 					signal: this._autoCompactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
+				const failureMessage = extensionCompactionFailureMessage(extensionResult);
+				if (failureMessage !== undefined) {
+					throw new Error(failureMessage);
+				}
 
 				if (extensionResult?.cancel) {
 					this._emit({

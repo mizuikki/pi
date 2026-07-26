@@ -780,10 +780,18 @@ export interface ToolResultPatch {
 	terminate?: boolean;
 }
 
-export interface SessionBeforeCompactResult {
-	cancel?: boolean;
-	compaction?: CompactResult;
-}
+/** A compaction interception can cancel, provide a result, or terminate the attempt with a bounded error. */
+export type SessionBeforeCompactResult =
+	| {
+			cancel: true;
+			errorMessage?: string;
+			compaction?: never;
+	  }
+	| {
+			cancel?: false;
+			errorMessage?: never;
+			compaction?: CompactResult;
+	  };
 
 export interface SessionBeforeTreeResult {
 	cancel?: boolean;

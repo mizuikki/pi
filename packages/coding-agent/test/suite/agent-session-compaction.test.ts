@@ -149,6 +149,95 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
 	});
 
+	it("routes an extension compaction failure through one manual error event without fallback", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", () => ({
+						cancel: true,
+						errorMessage: "upstream fixture detail",
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const fallbackCalls = useSummaryStreamFn(harness, "unexpected fallback summary");
+
+		await expect(harness.session.compact()).rejects.toThrow("upstream fixture detail");
+
+		const compactionEnds = harness.eventsOfType("compaction_end");
+		expect(compactionEnds).toHaveLength(1);
+		expect(compactionEnds[0]).toMatchObject({
+			reason: "manual",
+			aborted: false,
+			errorMessage: "Compaction failed: upstream fixture detail",
+		});
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(fallbackCalls()).toBe(0);
+	});
+
+	it("routes an extension compaction failure through one automatic error event without fallback", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", () => ({
+						cancel: true,
+						errorMessage: "upstream fixture detail",
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const fallbackCalls = useSummaryStreamFn(harness, "unexpected fallback summary");
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await expect(sessionInternals._runAutoCompaction("overflow", false)).resolves.toBe(false);
+
+		const compactionEnds = harness.eventsOfType("compaction_end");
+		expect(compactionEnds).toHaveLength(1);
+		expect(compactionEnds[0]).toMatchObject({
+			reason: "overflow",
+			aborted: false,
+			errorMessage: "Context overflow recovery failed: upstream fixture detail",
+		});
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(fallbackCalls()).toBe(0);
+	});
+
+	it("routes an extension threshold compaction failure through one automatic error event without fallback", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", () => ({
+						cancel: true,
+						errorMessage: "upstream fixture detail",
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const fallbackCalls = useSummaryStreamFn(harness, "unexpected fallback summary");
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(false);
+
+		const compactionEnds = harness.eventsOfType("compaction_end");
+		expect(compactionEnds).toHaveLength(1);
+		expect(compactionEnds[0]).toMatchObject({
+			reason: "threshold",
+			aborted: false,
+			errorMessage: "Auto-compaction failed: upstream fixture detail",
+		});
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(fallbackCalls()).toBe(0);
+	});
+
 	it("emits the newly appended manual compaction when summaries repeat", async () => {
 		const emittedCompactionIds: string[] = [];
 		const harness = await createHarness({

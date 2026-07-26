@@ -462,6 +462,9 @@ pi.on("session_before_compact", async (event, ctx) => {
   // Cancel:
   return { cancel: true };
 
+  // Terminal failure. Pi emits the corresponding compaction_end error.
+  return { cancel: true, errorMessage: "Provider summary request failed" };
+
   // Custom summary:
   return {
     compaction: {

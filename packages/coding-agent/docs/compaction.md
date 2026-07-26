@@ -274,7 +274,9 @@ Extensions can intercept and customize both compaction and branch summarization.
 
 ### session_before_compact
 
-Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
+Fired before auto-compaction or `/compact`. Can cancel, provide a custom summary, or return a
+bounded terminal error that Pi reports through its normal compaction error lifecycle. See
+`SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
@@ -295,6 +297,9 @@ pi.on("session_before_compact", async (event, ctx) => {
 
   // Cancel:
   return { cancel: true };
+
+  // Terminal failure. `errorMessage` must be non-empty, bounded, and cannot be combined with compaction.
+  return { cancel: true, errorMessage: "Provider summary request failed" };
 
   // Custom summary:
   return {

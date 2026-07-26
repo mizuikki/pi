@@ -166,6 +166,7 @@ function main() {
 				extensionSdkApiVersion: 1,
 				modelRuntimeApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
+				compactionFailureResultApiVersion: 1,
 			},
 			packages,
 		};

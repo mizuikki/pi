@@ -244,6 +244,8 @@ function createExtensionAPI(
 		// a fork can preserve package versions while extending the extension contract.
 		providerPayloadCompactionApiVersion: 1 as const,
 
+		compactionFailureResultApiVersion: 1 as const,
+
 		// Registration methods - write to extension
 		on(event: string, handler: HandlerFn): void {
 			runtime.assertActive();
