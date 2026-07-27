@@ -4,12 +4,14 @@ import type { Model, Usage } from "@earendil-works/pi-ai";
 import { prepareCompaction } from "./compaction/index.ts";
 import type {
 	BeforeProviderPayloadEventResult,
+	CompactionTrigger,
 	ExtensionRunner,
+	ProviderCheckpointProposal,
 	ProviderCompactionCommitToken,
 	ProviderPayloadAttribution,
 	ProviderRequestOrigin,
 } from "./extensions/index.ts";
-import type { SessionManager } from "./session-manager.ts";
+import type { CustomEntry, SessionManager } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 const providerCompactionTokenRuntimeBrand = Symbol("providerCompactionCommitToken");
@@ -34,9 +36,7 @@ function freezeStructuredValue<T>(value: T): T {
 		if (Array.isArray(current)) {
 			for (const item of current) stack.push(item);
 		} else {
-			for (const item of Object.values(current as Record<string, unknown>)) {
-				stack.push(item);
-			}
+			for (const item of Object.values(current as Record<string, unknown>)) stack.push(item);
 		}
 		Object.freeze(current);
 	}
@@ -55,10 +55,23 @@ function normalizeSummary(summary: unknown): string {
 }
 
 function normalizeTokensBefore(tokensBefore: unknown): number {
-	if (!Number.isFinite(tokensBefore) || typeof tokensBefore !== "number" || tokensBefore < 0) {
-		throw new Error("Inline compaction proposals must include a finite non-negative token count");
+	if (typeof tokensBefore !== "number" || !Number.isFinite(tokensBefore) || tokensBefore < 0) {
+		throw new Error("Compaction proposals must include a finite non-negative token count");
 	}
 	return Math.trunc(tokensBefore);
+}
+
+function normalizeCheckpointField(value: unknown, label: string): string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.length > 256 ||
+		value.trim().length === 0 ||
+		/[\u0000-\u001f\u007f]/.test(value)
+	) {
+		throw new Error(`Provider checkpoint ${label} is invalid`);
+	}
+	return value;
 }
 
 export class ProviderPayloadCompactionController {
@@ -83,45 +96,45 @@ export class ProviderPayloadCompactionController {
 		signal: AbortSignal,
 	): ProviderPayloadAttribution {
 		const sessionId = this.#sessionManager.getSessionId();
-		if (origin !== "agent") {
-			return { sessionId, origin, signal };
-		}
+		if (origin !== "agent") return { sessionId, origin, signal };
 		const leafId = this.#sessionManager.getLeafId();
-		if (leafId === null) {
-			return { sessionId, origin, signal };
-		}
+		if (leafId === null) return { sessionId, origin, signal };
 		const preparation = prepareCompaction(
 			this.#sessionManager.getBranch(),
 			this.#settingsManager.getCompactionSettings(),
 		);
-		if (!preparation) {
-			return { sessionId, origin, signal };
-		}
+		if (!preparation) return { sessionId, origin, signal };
 
-		const token = Object.freeze({
-			[providerCompactionTokenRuntimeBrand]: true,
-		}) as unknown as ProviderCompactionCommitToken;
-		const candidateRetainedTail = cloneAndFreezeMessages(preparation.retainedTail);
-		this.#snapshots.set(token as object, {
+		const token = this.#createToken({
 			sessionId,
 			providerId: model.provider,
 			modelId: model.id,
 			leafId,
 			firstKeptEntryId: preparation.firstKeptEntryId,
-			retainedTail: candidateRetainedTail,
-			consumed: false,
+			retainedTail: preparation.retainedTail,
 		});
-
+		const candidateRetainedTail = cloneAndFreezeMessages(preparation.retainedTail);
 		return {
 			sessionId,
 			origin,
 			signal,
-			compaction: Object.freeze({
-				token,
-				candidateLeafId: leafId,
-				candidateRetainedTail,
-			}),
+			compaction: Object.freeze({ token, candidateLeafId: leafId, candidateRetainedTail }),
 		};
+	}
+
+	/** Commit a manual or overflow provider checkpoint using the token on the compact event. */
+	async commitProviderCheckpoint(
+		model: Model<any>,
+		proposal: ProviderCheckpointProposal,
+		expectedToken: ProviderCompactionCommitToken | undefined,
+		signal: AbortSignal,
+		trigger: CompactionTrigger,
+		willRetry: boolean,
+	): Promise<CustomEntry> {
+		this.#assertProposalToken(proposal.token, expectedToken);
+		const snapshot = this.#lookupSnapshot(proposal.token, model, signal);
+		this.#assertCurrentPreparation(snapshot);
+		return this.#appendProviderCheckpoint(proposal, snapshot, signal, trigger, willRetry);
 	}
 
 	async commitPayload(
@@ -129,64 +142,47 @@ export class ProviderPayloadCompactionController {
 		result: BeforeProviderPayloadEventResult,
 		attribution: ProviderPayloadAttribution,
 	): Promise<unknown> {
-		const proposal = result.compaction;
-		if (proposal === undefined) {
+		if (result.compaction !== undefined && result.providerCheckpoint !== undefined) {
+			throw new Error("Provider compaction and checkpoint proposals are mutually exclusive");
+		}
+		if (result.providerCheckpoint !== undefined) {
+			if (attribution.origin !== "agent" || attribution.compaction === undefined) {
+				throw new Error("Provider checkpoint proposals are only allowed for agent-origin requests");
+			}
+			this.#assertProposalToken(result.providerCheckpoint.token, attribution.compaction.token);
+			const snapshot = this.#lookupSnapshot(result.providerCheckpoint.token, model, attribution.signal);
+			this.#assertCurrentPreparation(snapshot);
+			await this.#appendProviderCheckpoint(
+				result.providerCheckpoint,
+				snapshot,
+				attribution.signal,
+				"provider_inline",
+				false,
+			);
 			return result.payload;
 		}
+
+		const proposal = result.compaction;
+		if (proposal === undefined) return result.payload;
 		if (attribution.origin !== "agent" || attribution.compaction === undefined) {
 			throw new Error("Inline compaction proposals are only allowed for agent-origin provider requests");
 		}
-
-		const token = proposal.token as object;
-		const snapshot = this.#snapshots.get(token);
-		if (!snapshot) {
-			throw new Error("Inline compaction proposal used a stale or forged commit token");
-		}
-		if (snapshot.consumed) {
-			throw new Error("Inline compaction proposal reused a consumed commit token");
-		}
-		if (
-			snapshot.sessionId !== attribution.sessionId ||
-			snapshot.providerId !== model.provider ||
-			snapshot.modelId !== model.id
-		) {
-			throw new Error("Inline compaction proposal did not match the current request snapshot");
-		}
-		if (attribution.signal.aborted) {
-			throw new Error("Compaction cancelled");
-		}
-		const currentLeafId = this.#sessionManager.getLeafId();
-		if (currentLeafId !== snapshot.leafId) {
-			throw new Error("Inline compaction proposal became stale before commit");
-		}
-
-		const preparation = prepareCompaction(
-			this.#sessionManager.getBranch(),
-			this.#settingsManager.getCompactionSettings(),
-		);
-		if (!preparation) {
-			throw new Error("Inline compaction proposal no longer matches the active branch");
-		}
-		if (
-			preparation.firstKeptEntryId !== snapshot.firstKeptEntryId ||
-			!isDeepStrictEqual(preparation.retainedTail, snapshot.retainedTail)
-		) {
-			throw new Error("Inline compaction proposal did not match Pi's retained-tail snapshot");
-		}
+		this.#assertProposalToken(proposal.token, attribution.compaction.token);
+		const snapshot = this.#lookupSnapshot(proposal.token, model, attribution.signal);
+		this.#assertCurrentPreparation(snapshot);
 
 		const summary = normalizeSummary(proposal.summary);
 		const tokensBefore = normalizeTokensBefore(proposal.tokensBefore);
 		const usage = proposal.usage as Usage | undefined;
-
 		snapshot.consumed = true;
 		const parentId = snapshot.leafId;
-		const retainedTail = [...preparation.retainedTail];
+		const retainedTail = [...snapshot.retainedTail];
 		let compactionEntryId: string | undefined;
 		let savedEntry: ReturnType<SessionManager["getEntry"]>;
 		try {
 			compactionEntryId = this.#sessionManager.appendCompaction(
 				summary,
-				preparation.firstKeptEntryId,
+				snapshot.firstKeptEntryId,
 				tokensBefore,
 				proposal.details,
 				true,
@@ -199,7 +195,7 @@ export class ProviderPayloadCompactionController {
 				savedEntry.id !== compactionEntryId ||
 				savedEntry.parentId !== parentId ||
 				savedEntry.summary !== summary ||
-				savedEntry.firstKeptEntryId !== preparation.firstKeptEntryId ||
+				savedEntry.firstKeptEntryId !== snapshot.firstKeptEntryId ||
 				savedEntry.tokensBefore !== tokensBefore ||
 				!isDeepStrictEqual(savedEntry.details, proposal.details) ||
 				!isDeepStrictEqual(savedEntry.usage, usage) ||
@@ -228,5 +224,109 @@ export class ProviderPayloadCompactionController {
 			willRetry: false,
 		});
 		return result.payload;
+	}
+
+	#lookupSnapshot(
+		token: ProviderCompactionCommitToken,
+		model: Model<any>,
+		signal: AbortSignal,
+	): ProviderInlineCompactionSnapshot {
+		const snapshot = this.#snapshots.get(token as object);
+		if (snapshot === undefined) throw new Error("Provider checkpoint used a stale or forged commit token");
+		if (snapshot.consumed) throw new Error("Provider checkpoint reused a consumed commit token");
+		if (
+			snapshot.sessionId !== this.#sessionManager.getSessionId() ||
+			snapshot.providerId !== model.provider ||
+			snapshot.modelId !== model.id
+		) {
+			throw new Error("Provider checkpoint did not match the current request snapshot");
+		}
+		if (signal.aborted) throw new Error("Compaction cancelled");
+		if (this.#sessionManager.getLeafId() !== snapshot.leafId) {
+			throw new Error("Provider checkpoint became stale before commit");
+		}
+		return snapshot;
+	}
+
+	#assertProposalToken(
+		proposalToken: ProviderCompactionCommitToken,
+		expectedToken: ProviderCompactionCommitToken | undefined,
+	): void {
+		if (expectedToken === undefined || proposalToken !== expectedToken) {
+			throw new Error("Provider checkpoint proposal did not match the active request token");
+		}
+	}
+
+	#assertCurrentPreparation(snapshot: ProviderInlineCompactionSnapshot): void {
+		const preparation = prepareCompaction(
+			this.#sessionManager.getBranch(),
+			this.#settingsManager.getCompactionSettings(),
+		);
+		if (
+			preparation === undefined ||
+			preparation.firstKeptEntryId !== snapshot.firstKeptEntryId ||
+			!isDeepStrictEqual(preparation.retainedTail, snapshot.retainedTail)
+		) {
+			throw new Error("Provider checkpoint no longer matches the active branch");
+		}
+	}
+
+	async #appendProviderCheckpoint(
+		proposal: ProviderCheckpointProposal,
+		snapshot: ProviderInlineCompactionSnapshot,
+		signal: AbortSignal,
+		trigger: CompactionTrigger,
+		willRetry: boolean,
+	): Promise<CustomEntry> {
+		const customType = normalizeCheckpointField(proposal.customType, "custom type");
+		const checkpointId = normalizeCheckpointField(proposal.checkpointId, "ID");
+		if (signal.aborted) throw new Error("Compaction cancelled");
+		snapshot.consumed = true;
+		let entryId: string | undefined;
+		try {
+			entryId = this.#sessionManager.appendCustomEntry(customType, proposal.data);
+			const savedEntry = this.#sessionManager.getEntry(entryId);
+			if (
+				savedEntry?.type !== "custom" ||
+				savedEntry.id !== entryId ||
+				savedEntry.parentId !== snapshot.leafId ||
+				savedEntry.customType !== customType ||
+				!isDeepStrictEqual(savedEntry.data, proposal.data)
+			) {
+				throw new Error("Provider checkpoint append could not be verified after append");
+			}
+			const extensionRunner = this.#extensionRunnerRef.current;
+			if (extensionRunner !== undefined && !extensionRunner.setProviderCheckpointUsageBoundary(entryId)) {
+				throw new Error("Provider checkpoint usage boundary could not be recorded");
+			}
+			await this.#extensionRunnerRef.current?.emitCompactionTransactionEvent({
+				type: "session_provider_checkpoint",
+				entry: savedEntry,
+				checkpointId,
+				trigger,
+				willRetry,
+			});
+			return savedEntry;
+		} catch (error) {
+			try {
+				await this.#extensionRunnerRef.current?.emitCompactionTransactionEvent({
+					type: "session_provider_checkpoint_indeterminate",
+					...(entryId === undefined ? {} : { entryId }),
+					checkpointId,
+					trigger,
+				});
+			} catch {
+				// Preserve the original transaction failure.
+			}
+			throw error;
+		}
+	}
+
+	#createToken(snapshot: Omit<ProviderInlineCompactionSnapshot, "consumed">): ProviderCompactionCommitToken {
+		const token = Object.freeze({
+			[providerCompactionTokenRuntimeBrand]: true,
+		}) as unknown as ProviderCompactionCommitToken;
+		this.#snapshots.set(token as object, { ...snapshot, consumed: false });
+		return token;
 	}
 }

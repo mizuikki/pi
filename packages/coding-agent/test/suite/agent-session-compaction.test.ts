@@ -132,7 +132,7 @@ describe("AgentSession compaction characterization", () => {
 		const compactionEntries = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
 		const estimatedTokensAfter = harness.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 
-		expect(result.summary).toBe("summary from extension");
+		expect((result as { summary: string }).summary).toBe("summary from extension");
 		expect(result.usage).toEqual(summaryUsage);
 		expect(result.estimatedTokensAfter).toBe(estimatedTokensAfter);
 		expect(compactionEntries).toHaveLength(1);
@@ -147,6 +147,42 @@ describe("AgentSession compaction characterization", () => {
 		expect(statsAfter.tokens.cacheWrite).toBe(statsBefore.tokens.cacheWrite + summaryUsage.cacheWrite);
 		expect(statsAfter.cost).toBe(statsBefore.cost + summaryUsage.cost.total);
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
+	});
+
+	it("manually commits an extension provider checkpoint as a custom entry", async () => {
+		const checkpointEvents: unknown[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						providerCheckpoint: {
+							token: event.checkpointToken!,
+							customType: "fixture.provider-checkpoint",
+							checkpointId: "fixture-checkpoint-1",
+							data: { kind: "fixture", version: 1 },
+						},
+					}));
+					(pi.on as unknown as (event: "session_provider_checkpoint", handler: (event: unknown) => void) => void)(
+						"session_provider_checkpoint",
+						(event) => checkpointEvents.push(event),
+					);
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+
+		const result = await harness.session.compact();
+
+		expect(result).toMatchObject({ kind: "provider_checkpoint", checkpointId: "fixture-checkpoint-1" });
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.find((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint"),
+		).toMatchObject({ data: { kind: "fixture", version: 1 } });
+		expect(checkpointEvents).toHaveLength(1);
 	});
 
 	it("routes an extension compaction failure through one manual error event without fallback", async () => {
@@ -299,7 +335,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const result = await harness.session.compact();
 
-		expect(result.summary).toContain("summary from custom stream");
+		expect((result as { summary: string }).summary).toContain("summary from custom stream");
 		expect(getStreamCallCount()).toBe(1);
 	});
 
@@ -334,7 +370,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const result = await harness.session.compact();
 
-		expect(result.summary).toContain("summary with bearer auth");
+		expect((result as { summary: string }).summary).toContain("summary with bearer auth");
 		expect(harness.faux.state.callCount).toBe(1);
 	});
 

@@ -167,6 +167,7 @@ function main() {
 				modelRuntimeApiVersion: 1,
 				retryPolicySnapshotApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
+				providerCheckpointCommitApiVersion: 1,
 				compactionFailureResultApiVersion: 1,
 			},
 			packages,

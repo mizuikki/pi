@@ -196,7 +196,7 @@ describe.skipIf(!API_KEY)("Compaction extensions", () => {
 
 		const result = await session.compact();
 
-		expect(result.summary).toBe(customSummary);
+		expect((result as { summary: string }).summary).toBe(customSummary);
 
 		const compactEvents = capturedEvents.filter((e) => e.type === "session_compact");
 		expect(compactEvents.length).toBe(1);
@@ -268,8 +268,8 @@ describe.skipIf(!API_KEY)("Compaction extensions", () => {
 
 		const result = await session.compact();
 
-		expect(result.summary).toBeDefined();
-		expect(result.summary.length).toBeGreaterThan(0);
+		expect((result as { summary: string }).summary).toBeDefined();
+		expect((result as { summary: string }).summary.length).toBeGreaterThan(0);
 
 		const compactEvents = capturedEvents.filter((e): e is SessionCompactEvent => e.type === "session_compact");
 		expect(compactEvents.length).toBe(1);
@@ -411,7 +411,7 @@ describe.skipIf(!API_KEY)("Compaction extensions", () => {
 
 		const result = await session.compact();
 
-		expect(result.summary).toBe(customSummary);
+		expect((result as { summary: string }).summary).toBe(customSummary);
 		expect(result.tokensBefore).toBe(999);
 	}, 120000);
 });
@@ -513,6 +513,65 @@ describe("Provider payload compaction extensions", () => {
 		});
 	});
 
+	it("commits a provider checkpoint without creating a textual compaction entry", async () => {
+		const checkpointEvents: unknown[] = [];
+		let didCheckpoint = false;
+		let harness!: Harness;
+
+		harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("before_provider_payload", async (event) => {
+						if (
+							event.attribution.origin !== "agent" ||
+							event.attribution.compaction === undefined ||
+							didCheckpoint
+						) {
+							return { payload: event.payload };
+						}
+						didCheckpoint = true;
+						return {
+							payload: { steps: ["provider", "checkpointed"] },
+							providerCheckpoint: {
+								token: event.attribution.compaction.token,
+								customType: "fixture.provider-checkpoint",
+								checkpointId: "fixture-checkpoint-1",
+								data: { kind: "fixture", version: 1 },
+							},
+						};
+					});
+					pi.on("session_provider_checkpoint", (event) => {
+						checkpointEvents.push(event);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("first reply"),
+			async (_context, options, _state, model) => {
+				const finalPayload = await options?.onPayload?.({ steps: ["provider"] }, model);
+				expect(finalPayload).toEqual({ steps: ["provider", "checkpointed"] });
+				expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+				return fauxAssistantMessage("second reply");
+			},
+		]);
+
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+
+		const checkpoint = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint");
+		expect(checkpoint).toMatchObject({
+			type: "custom",
+			customType: "fixture.provider-checkpoint",
+			data: { kind: "fixture", version: 1 },
+		});
+		expect(checkpointEvents).toHaveLength(1);
+	});
+
 	it("rejects payload mutation after an inline compaction proposal", async () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
@@ -597,6 +656,19 @@ describe("Provider payload compaction extensions", () => {
 			compaction?: { token: unknown };
 		};
 		expect(attribution.compaction).toBeDefined();
+		const otherAttribution = controller.createAttribution(harness.getModel(), "agent", signal) as {
+			compaction?: { token: unknown };
+		};
+		await expect(
+			controller.commitPayload(
+				harness.getModel(),
+				{
+					payload: { steps: ["provider"] },
+					compaction: { token: otherAttribution.compaction!.token, summary: "inline summary", tokensBefore: 1 },
+				},
+				attribution,
+			),
+		).rejects.toThrow("active request token");
 
 		await expect(
 			controller.commitPayload(
@@ -607,7 +679,7 @@ describe("Provider payload compaction extensions", () => {
 				},
 				attribution,
 			),
-		).rejects.toThrow("stale or forged");
+		).rejects.toThrow("active request token");
 
 		await expect(
 			controller.commitPayload(
@@ -723,7 +795,7 @@ describe("Provider payload compaction extensions", () => {
 		const attribution = controller.createAttribution(harness.getModel(), "agent", signal);
 		await expect(
 			runner.emitBeforeProviderPayload(harness.getModel(), { steps: ["provider"] }, attribution, signal),
-		).rejects.toThrow("at most one compaction proposal");
+		).rejects.toThrow("after the payload is sealed");
 		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
 	});
 

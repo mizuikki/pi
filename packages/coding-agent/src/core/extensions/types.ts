@@ -47,7 +47,7 @@ import type {
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
-import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
+import type { CompactionOutcome, CompactionPreparation, TextualCompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
@@ -308,7 +308,7 @@ export interface HostRetryPolicySnapshot {
 
 export interface CompactOptions {
 	customInstructions?: string;
-	onComplete?: (result: CompactionResult) => void;
+	onComplete?: (result: CompactionOutcome) => void;
 	onError?: (error: Error) => void;
 }
 
@@ -605,6 +605,8 @@ export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
 	preparation: CompactionPreparation;
 	branchEntries: SessionEntry[];
+	/** Fork-private token for an extension-owned custom checkpoint transaction. */
+	checkpointToken?: ProviderCompactionCommitToken;
 	customInstructions?: string;
 	/** What triggered the compaction: manual /compact, the context threshold, or context overflow recovery */
 	reason: Exclude<CompactionTrigger, "provider_inline">;
@@ -633,6 +635,23 @@ export interface SessionCompactIndeterminateEvent {
 	type: "session_compact_indeterminate";
 	entryId?: string;
 	trigger: "provider_inline";
+}
+
+/** Emitted after an extension-owned custom checkpoint has been appended and verified. */
+export interface SessionProviderCheckpointEvent {
+	type: "session_provider_checkpoint";
+	entry: CustomEntry;
+	checkpointId: string;
+	trigger: CompactionTrigger;
+	willRetry: boolean;
+}
+
+/** Emitted when a custom checkpoint append or readback cannot be verified. */
+export interface SessionProviderCheckpointIndeterminateEvent {
+	type: "session_provider_checkpoint_indeterminate";
+	entryId?: string;
+	checkpointId: string;
+	trigger: CompactionTrigger;
 }
 
 /** Fired before an extension runtime is torn down due to quit, reload, or session replacement. */
@@ -682,6 +701,8 @@ export type SessionEvent =
 	| SessionBeforeCompactEvent
 	| SessionCompactEvent
 	| SessionCompactIndeterminateEvent
+	| SessionProviderCheckpointEvent
+	| SessionProviderCheckpointIndeterminateEvent
 	| SessionShutdownEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent;
@@ -722,6 +743,14 @@ export interface ProviderCompactionProposal {
 	tokensBefore: number;
 	usage?: Usage;
 	details?: unknown;
+}
+
+/** Proposal for an extension-owned, context-invisible custom checkpoint. */
+export interface ProviderCheckpointProposal {
+	token: ProviderCompactionCommitToken;
+	customType: string;
+	checkpointId: string;
+	data: unknown;
 }
 
 /** Fired before a provider request is sent. Can replace the payload. */
@@ -1183,11 +1212,19 @@ export type SessionBeforeCompactResult =
 			cancel: true;
 			errorMessage?: string;
 			compaction?: never;
+			providerCheckpoint?: never;
 	  }
 	| {
 			cancel?: false;
 			errorMessage?: never;
-			compaction?: CompactionResult;
+			compaction?: TextualCompactionResult;
+			providerCheckpoint?: never;
+	  }
+	| {
+			cancel?: false;
+			errorMessage?: never;
+			compaction?: never;
+			providerCheckpoint: ProviderCheckpointProposal;
 	  };
 
 export interface SessionBeforeTreeResult {
@@ -1208,6 +1245,7 @@ export interface SessionBeforeTreeResult {
 export interface BeforeProviderPayloadEventResult {
 	payload: unknown;
 	compaction?: ProviderCompactionProposal;
+	providerCheckpoint?: ProviderCheckpointProposal;
 }
 
 // ============================================================================
@@ -1285,6 +1323,12 @@ export interface ExtensionAPI {
 	 */
 	readonly providerPayloadCompactionApiVersion: 1;
 
+	/** Version of the atomic extension-owned custom checkpoint transaction. */
+	readonly providerCheckpointCommitApiVersion?: 1;
+
+	/** Restore or clear the active provider-checkpoint context-usage epoch. */
+	setProviderCheckpointUsageBoundary?(entryId?: string): boolean;
+
 	/**
 	 * Version of the terminal extension compaction failure result contract.
 	 * Extensions must fail closed when they require this result handling.
@@ -1310,6 +1354,11 @@ export interface ExtensionAPI {
 	): void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
 	on(event: "session_compact_indeterminate", handler: ExtensionHandler<SessionCompactIndeterminateEvent>): void;
+	on(event: "session_provider_checkpoint", handler: ExtensionHandler<SessionProviderCheckpointEvent>): void;
+	on(
+		event: "session_provider_checkpoint_indeterminate",
+		handler: ExtensionHandler<SessionProviderCheckpointIndeterminateEvent>,
+	): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
@@ -1726,6 +1775,7 @@ export interface ExtensionActions {
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
+	setProviderCheckpointUsageBoundary: (entryId?: string) => boolean;
 }
 
 /**

@@ -3087,15 +3087,19 @@ export class InteractiveMode {
 						this.showStatus("Auto-compaction cancelled");
 					}
 				} else if (event.result) {
-					this.chatContainer.clear();
-					this.rebuildChatFromMessages();
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
+					if ("kind" in event.result && event.result.kind === "provider_checkpoint") {
+						this.showStatus("Provider checkpoint saved");
+					} else if ("summary" in event.result) {
+						this.chatContainer.clear();
+						this.rebuildChatFromMessages();
+						this.addMessageToChat(
+							createCompactionSummaryMessage(
+								event.result.summary,
+								event.result.tokensBefore,
+								new Date().toISOString(),
+							),
+						);
+					}
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {

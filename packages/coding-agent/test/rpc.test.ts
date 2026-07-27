@@ -94,7 +94,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 
 		// Compact
 		const result = await client.compact();
-		expect(result.summary).toBeDefined();
+		expect((result as { summary: string }).summary).toBeDefined();
 		expect(result.tokensBefore).toBeGreaterThan(0);
 
 		// Wait for file writes

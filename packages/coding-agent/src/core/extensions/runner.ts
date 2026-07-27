@@ -47,6 +47,7 @@ import type {
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
+	ProviderCheckpointProposal,
 	ProviderCompactionProposal,
 	ProviderConfig,
 	ProviderPayloadAttribution,
@@ -63,6 +64,8 @@ import type {
 	SessionBeforeTreeResult,
 	SessionCompactEvent,
 	SessionCompactIndeterminateEvent,
+	SessionProviderCheckpointEvent,
+	SessionProviderCheckpointIndeterminateEvent,
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -349,6 +352,7 @@ export class ExtensionRunner {
 		this.runtime.setModel = actions.setModel;
 		this.runtime.getThinkingLevel = actions.getThinkingLevel;
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
+		this.runtime.setProviderCheckpointUsageBoundary = actions.setProviderCheckpointUsageBoundary;
 
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
@@ -851,7 +855,13 @@ export class ExtensionRunner {
 	}
 
 	/** Emit a transaction outcome event without swallowing handler failures. */
-	async emitCompactionTransactionEvent(event: SessionCompactEvent | SessionCompactIndeterminateEvent): Promise<void> {
+	async emitCompactionTransactionEvent(
+		event:
+			| SessionCompactEvent
+			| SessionCompactIndeterminateEvent
+			| SessionProviderCheckpointEvent
+			| SessionProviderCheckpointIndeterminateEvent,
+	): Promise<void> {
 		const ctx = this.createContext();
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(event.type);
@@ -870,6 +880,11 @@ export class ExtensionRunner {
 				}
 			}
 		}
+	}
+
+	/** Record or clear the host-owned provider checkpoint usage epoch. */
+	setProviderCheckpointUsageBoundary(entryId?: string): boolean {
+		return this.runtime.setProviderCheckpointUsageBoundary(entryId);
 	}
 
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
@@ -1132,7 +1147,7 @@ export class ExtensionRunner {
 		const ctx = this.createContext(signal);
 		let currentPayload = payload;
 		let sealedPayload: unknown | undefined;
-		let proposal: ProviderCompactionProposal | undefined;
+		let proposal: ProviderCompactionProposal | ProviderCheckpointProposal | undefined;
 		const sessionId = attribution.sessionId;
 		if (!sessionId.trim()) {
 			throw new Error("Cannot issue a provider request without an active session ID");
@@ -1155,19 +1170,24 @@ export class ExtensionRunner {
 					if (handlerResult === undefined) continue;
 					if (sealedPayload !== undefined) {
 						this.assertSealedProviderPayload(handlerResult.payload, sealedPayload);
-						if (handlerResult.compaction !== undefined) {
+						if (handlerResult.compaction !== undefined || handlerResult.providerCheckpoint !== undefined) {
 							throw new ProviderPayloadReducerError(
-								"before_provider_payload may return at most one compaction proposal",
+								"before_provider_payload cannot return a compaction proposal after the payload is sealed",
 							);
 						}
 						currentPayload = sealedPayload;
 						continue;
 					}
 					currentPayload = handlerResult.payload;
-					if (handlerResult.compaction !== undefined) {
+					if (handlerResult.compaction !== undefined && handlerResult.providerCheckpoint !== undefined) {
+						throw new ProviderPayloadReducerError(
+							"before_provider_payload may return only one compaction proposal",
+						);
+					}
+					if (handlerResult.compaction !== undefined || handlerResult.providerCheckpoint !== undefined) {
 						sealedPayload = this.sealProviderPayload(handlerResult.payload);
 						currentPayload = sealedPayload;
-						proposal = handlerResult.compaction;
+						proposal = handlerResult.compaction ?? handlerResult.providerCheckpoint;
 					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
@@ -1216,9 +1236,11 @@ export class ExtensionRunner {
 			}
 		}
 
-		return proposal === undefined
-			? { payload: currentPayload }
-			: { payload: sealedPayload ?? currentPayload, compaction: proposal };
+		if (proposal === undefined) return { payload: currentPayload };
+		if ("customType" in proposal) {
+			return { payload: sealedPayload ?? currentPayload, providerCheckpoint: proposal };
+		}
+		return { payload: sealedPayload ?? currentPayload, compaction: proposal };
 	}
 
 	async emitBeforeProviderHeaders(headers: ProviderHeaders): Promise<ProviderHeaders> {
