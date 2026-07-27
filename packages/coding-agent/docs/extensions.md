@@ -1145,8 +1145,10 @@ const snapshot = ctx.getRetryPolicy?.();
 Each call allocates new `agentTurn` and `providerRequest` objects. Mutating a
 returned object does not update Pi settings. Treat the result as read-only and
 reuse one snapshot when a single extension operation needs a stable policy.
-Required keys are always present; omission of `timeoutMs` or `maxRetries` is
-equivalent to `undefined` and must not be filled from stale consumer settings.
+The top-level objects and their required nested keys are always present.
+`providerRequest.timeoutMs` and `providerRequest.maxRetries` are the only fields
+that may be omitted; omission is equivalent to `undefined` and must not be
+filled from stale consumer settings.
 
 The public getter is optional so extensions and test mocks that do not use this
 fork capability remain source-compatible. An extension that depends on it must
