@@ -3,12 +3,17 @@
 ## Local Fork Extensions
 
 - The sibling extensions `pi-mcp-adapter`, `pi-dynamic-workflows`, and
-  `pi-codex-adaptor` target this private Pi fork. Pi package versions are
+  `pi-codex-adaptor` target this private Pi fork only. Stock/public Pi hosts
+  (including npm/`earendil-works` release `0.82.1` and other non-fork builds)
+  are unsupported; extensions must fail closed when the required ABI fields are
+  missing. The private product string (currently `0.82.1-local.1`) is
   product/build metadata, not the extension compatibility identity.
-- `ExtensionAPI.extensionSdkApiVersion` is the common extension ABI contract.
-  Keep it stable across compatible Pi upgrades and increment it only for an
-  incompatible common extension API change. Feature capabilities remain
-  independently versioned.
+- `ExtensionAPI.extensionSdkApiVersion` is the common extension ABI contract
+  (currently `1`). Keep it stable across compatible Pi upgrades and increment
+  it only for an incompatible common extension API change. Feature capabilities
+  (`modelRuntimeApiVersion`, `providerPayloadCompactionApiVersion`,
+  `compactionFailureResultApiVersion`) remain independently versioned and are
+  also currently `1` on this fork.
 - Extension imports of `@earendil-works/pi-*` are wildcard peers at runtime and
   local `file:../pi/packages/...` development dependencies only. Every private
   extension must preflight `extensionSdkApiVersion` before registration. Do not

@@ -62,11 +62,16 @@ npm run check         # Lint, format, and type check
 ## Local fork extension contract
 
 This checkout is the private host for the sibling `pi-mcp-adapter`,
-`pi-dynamic-workflows`, and `pi-codex-adaptor` extensions. The public SDK
-workspaces share a product version, but extension compatibility is defined by
-`ExtensionAPI.extensionSdkApiVersion`, currently `1`. Extensions use wildcard
-Pi peer dependencies, validate the runtime API version before registering
-anything, and use `file:../pi/packages/...` only for sibling development.
+`pi-dynamic-workflows`, and `pi-codex-adaptor` extensions. Stock/public Pi
+releases (including npm `0.82.1`) are unsupported hosts; private extensions
+must fail closed when the required ABI fields are absent. Workspace packages
+share a private product version (currently `0.82.1-local.1`), but that string
+is build metadata only. Extension compatibility is defined by
+`ExtensionAPI.extensionSdkApiVersion` (currently `1`) plus independently
+versioned feature capabilities on the loader-created API. Extensions use
+wildcard Pi peer dependencies, preflight those runtime fields before
+registering anything, and use `file:../pi/packages/...` only for sibling
+development.
 
 Install extensions from their source directories, never from the package
 registry:
@@ -97,10 +102,10 @@ GitHub releases include a versioned source archive covered by the release's `SHA
 VERSION="<release-version>"
 tar -xzf "pi-${VERSION}-source.tar.gz"
 cd "pi-${VERSION}"
-./scripts/build-binaries.sh --platform linux-x64 --out "$PWD/out"
+./scripts/build-binaries.sh --offline-model-data --platform linux-x64 --out "$PWD/out"
 ```
 
-The script installs dependencies, builds the monorepo, compiles the Bun executable, and stages its runtime assets. Package maintainers who provide dependencies separately can pass `--skip-install --skip-deps`.
+The source archive includes the generated provider model data used for the release. `--offline-model-data` builds with that snapshot instead of refreshing it from live provider catalogs. The script still installs dependencies, builds the monorepo, compiles the Bun executable, and stages its runtime assets. Package maintainers who provide dependencies separately can pass `--skip-install --skip-deps`.
 
 ## Supply-chain hardening
 
