@@ -24,9 +24,13 @@ export class ModelRegistry {
 		this.runtime = runtime;
 	}
 
-	/** Reload models.json asynchronously. Await before making synchronous registry reads. */
+	/**
+	 * Reload models.json asynchronously. Await before making synchronous registry reads.
+	 * Remote catalog fetches stay off: this facade is the extension-facing disk reload path.
+	 * Callers that need network catalog refresh should use ModelRuntime.refresh({ allowNetwork: true }).
+	 */
 	async refresh(): Promise<void> {
-		await this.runtime.refresh();
+		await this.runtime.refresh({ allowNetwork: false });
 	}
 
 	getError(): string | undefined {
