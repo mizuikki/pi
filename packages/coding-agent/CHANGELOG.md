@@ -10,6 +10,10 @@
 
 - Added trusted session attribution and request-origin metadata to `before_provider_request`, including manual/automatic compaction, turn-prefix, and branch-summary provider calls.
 
+### Changed
+
+- Rehomed the private fork product version to `0.82.1-local.1` on upstream `v0.82.1` while keeping `extensionSdkApiVersion` and fork feature capability versions at `1`. Package/`0.82.1` product strings are not extension ABI identity; stock/public `0.82.1` remains an unsupported host for the private sibling extensions.
+
 ### Fixed
 
 - Fixed clipboard text paste fallback on Linux and Termux when native clipboard access is unavailable.
