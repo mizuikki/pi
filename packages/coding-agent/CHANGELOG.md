@@ -9,6 +9,7 @@
 ### Added
 
 - Added trusted session attribution and request-origin metadata to `before_provider_request`, including manual/automatic compaction, turn-prefix, and branch-summary provider calls.
+- Added the independently versioned retry-policy snapshot extension capability (`retryPolicySnapshotApiVersion: 1`), including `HostRetryPolicySnapshot` and the read-only `ExtensionContext.getRetryPolicy()` getter, without changing the common extension SDK ABI.
 
 ### Changed
 

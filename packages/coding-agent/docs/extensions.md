@@ -1121,6 +1121,38 @@ pi.on("before_agent_start", (event, ctx) => {
 });
 ```
 
+### ctx.getRetryPolicy()
+
+Returns a fresh snapshot of the active session's effective retry settings:
+
+```typescript
+interface HostRetryPolicySnapshot {
+  agentTurn: {
+    enabled: boolean;
+    maxRetries: number;
+    baseDelayMs: number;
+  };
+  providerRequest: {
+    timeoutMs?: number;
+    maxRetries?: number;
+    maxRetryDelayMs: number;
+  };
+}
+
+const snapshot = ctx.getRetryPolicy?.();
+```
+
+Each call allocates new `agentTurn` and `providerRequest` objects. Mutating a
+returned object does not update Pi settings. Treat the result as read-only and
+reuse one snapshot when a single extension operation needs a stable policy.
+Required keys are always present; omission of `timeoutMs` or `maxRetries` is
+equivalent to `undefined` and must not be filled from stale consumer settings.
+
+The public getter is optional so extensions and test mocks that do not use this
+fork capability remain source-compatible. An extension that depends on it must
+first require `pi.retryPolicySnapshotApiVersion === 1`, then fail closed if a
+runtime context does not provide the getter.
+
 ## ExtensionCommandContext
 
 Command handlers receive `ExtensionCommandContext`, which extends `ExtensionContext` with session control methods. These are only available in commands because they can deadlock if called from event handlers.
@@ -1372,6 +1404,26 @@ export default function (pi: ExtensionAPI) {
 ```
 
 ## ExtensionAPI Methods
+
+### Runtime capability versions
+
+The private fork exposes a stable common ABI plus independently versioned
+feature capabilities on `ExtensionAPI`. Check required versions in the factory
+before registering tools, commands, or event handlers:
+
+```typescript
+export default function extension(pi: ExtensionAPI) {
+  if (pi.extensionSdkApiVersion !== 1 || pi.retryPolicySnapshotApiVersion !== 1) {
+    throw new Error("Incompatible Pi extension host");
+  }
+
+  // Registration is safe after all required capability checks pass.
+}
+```
+
+Adding `retryPolicySnapshotApiVersion: 1` does not change
+`extensionSdkApiVersion`; extensions that do not consume retry snapshots do not
+need to adopt the feature capability.
 
 ### pi.on(event, handler)
 

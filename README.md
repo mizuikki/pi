@@ -68,7 +68,9 @@ must fail closed when the required ABI fields are absent. Workspace packages
 share a private product version (currently `0.82.1-local.1`), but that string
 is build metadata only. Extension compatibility is defined by
 `ExtensionAPI.extensionSdkApiVersion` (currently `1`) plus independently
-versioned feature capabilities on the loader-created API. Extensions use
+versioned feature capabilities on the loader-created API, including
+`retryPolicySnapshotApiVersion` (currently `1`) for read-only active-session
+retry snapshots. Extensions use
 wildcard Pi peer dependencies, preflight those runtime fields before
 registering anything, and use `file:../pi/packages/...` only for sibling
 development.
@@ -93,6 +95,8 @@ so `file:../pi/...` development dependencies resolve before installation.
 Blocking extension CI consumes an immutable `pi-extension-sdk-v<major>.<minor>.<patch>`
 tag. The manifest's resolved commit and SHA-256 values remain the provenance
 source; the tag and Pi package version are not substitutes for those checks.
+The current retry-snapshot SDK baseline is `pi-extension-sdk-v1.1.0`; the
+common extension ABI remains `extensionSdkApiVersion` 1.
 
 ## Building standalone binaries from release source
 

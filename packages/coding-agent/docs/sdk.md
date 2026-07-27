@@ -1177,6 +1177,7 @@ type CreateAgentSessionResult
 type ExtensionFactory
 type InlineExtension
 type ExtensionAPI
+type HostRetryPolicySnapshot
 type ToolDefinition
 type Skill
 type PromptTemplate
