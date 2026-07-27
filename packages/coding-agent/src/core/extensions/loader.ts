@@ -240,6 +240,8 @@ function createExtensionAPI(
 		// Feature-specific contracts remain independently versioned.
 		modelRuntimeApiVersion: 1 as const,
 
+		retryPolicySnapshotApiVersion: 1 as const,
+
 		// This is intentionally part of the runtime API rather than package-version detection:
 		// a fork can preserve package versions while extending the extension contract.
 		providerPayloadCompactionApiVersion: 1 as const,

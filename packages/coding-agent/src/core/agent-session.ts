@@ -2591,6 +2591,14 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				getRetryPolicy: () => {
+					const agentTurn = this.settingsManager.getRetrySettings();
+					const providerRequest = this.settingsManager.getProviderRetrySettings();
+					return {
+						agentTurn: { ...agentTurn },
+						providerRequest: { ...providerRequest },
+					};
+				},
 			},
 			{
 				registerProvider: (name, config, owner) => {

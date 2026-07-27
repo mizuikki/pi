@@ -11,8 +11,9 @@
 - `ExtensionAPI.extensionSdkApiVersion` is the common extension ABI contract
   (currently `1`). Keep it stable across compatible Pi upgrades and increment
   it only for an incompatible common extension API change. Feature capabilities
-  (`modelRuntimeApiVersion`, `providerPayloadCompactionApiVersion`,
-  `compactionFailureResultApiVersion`) remain independently versioned and are
+  (`modelRuntimeApiVersion`, `retryPolicySnapshotApiVersion`,
+  `providerPayloadCompactionApiVersion`, `compactionFailureResultApiVersion`)
+  remain independently versioned and are
   also currently `1` on this fork.
 - Extension imports of `@earendil-works/pi-*` are wildcard peers at runtime and
   local `file:../pi/packages/...` development dependencies only. Every private
