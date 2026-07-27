@@ -96,6 +96,7 @@ export type {
 	ExtensionWidgetOptions,
 	FindToolCallEvent,
 	GrepToolCallEvent,
+	HostRetryPolicySnapshot,
 	InlineExtension,
 	InputEvent,
 	InputEventResult,

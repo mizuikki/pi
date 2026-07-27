@@ -165,6 +165,7 @@ function main() {
 			capabilities: {
 				extensionSdkApiVersion: 1,
 				modelRuntimeApiVersion: 1,
+				retryPolicySnapshotApiVersion: 1,
 				providerPayloadCompactionApiVersion: 1,
 				compactionFailureResultApiVersion: 1,
 			},

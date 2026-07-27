@@ -292,6 +292,20 @@ export interface ContextUsage {
 	percent: number | null;
 }
 
+/** Effective retry settings exposed by the active host session. */
+export interface HostRetryPolicySnapshot {
+	agentTurn: {
+		enabled: boolean;
+		maxRetries: number;
+		baseDelayMs: number;
+	};
+	providerRequest: {
+		timeoutMs?: number;
+		maxRetries?: number;
+		maxRetryDelayMs: number;
+	};
+}
+
 export interface CompactOptions {
 	customInstructions?: string;
 	onComplete?: (result: CompactionResult) => void;
@@ -338,6 +352,8 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Get the active session's effective retry policy. */
+	getRetryPolicy?(): HostRetryPolicySnapshot;
 }
 
 /**
@@ -1260,6 +1276,9 @@ export interface ExtensionAPI {
 	 */
 	readonly modelRuntimeApiVersion: 1;
 
+	/** Version of the active-session retry policy snapshot contract. */
+	readonly retryPolicySnapshotApiVersion?: 1;
+
 	/**
 	 * Version of the atomic before_provider_payload compaction transaction exposed by this host.
 	 * Extensions must fail closed when they require a newer transaction contract.
@@ -1724,6 +1743,7 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
+	getRetryPolicy?: () => HostRetryPolicySnapshot;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;
 }
 

@@ -484,6 +484,31 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("context creation", () => {
+		it("exposes retry policy snapshots on event and command contexts", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const snapshot = {
+				agentTurn: { enabled: true, maxRetries: 3, baseDelayMs: 2000 },
+				providerRequest: { maxRetryDelayMs: 60000 },
+			};
+
+			runner.bindCore(extensionActions, {
+				...extensionContextActions,
+				getRetryPolicy: () => snapshot,
+			});
+
+			expect(runner.createContext().getRetryPolicy?.()).toBe(snapshot);
+			expect(runner.createCommandContext().getRetryPolicy?.()).toBe(snapshot);
+		});
+
+		it("fails clearly when retry policy snapshot is not bound", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, extensionContextActions);
+
+			expect(() => runner.createContext().getRetryPolicy?.()).toThrow("Host retry policy snapshot is not bound");
+		});
+
 		it("exposes the current abort signal on ExtensionContext", async () => {
 			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);

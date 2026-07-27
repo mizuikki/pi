@@ -30,6 +30,7 @@ export function readLocalSdkManifest(manifestPath) {
 		manifest.schemaVersion !== 1 ||
 		typeof manifest.sdkVersion !== "string" ||
 		manifest.capabilities?.extensionSdkApiVersion !== 1 ||
+		manifest.capabilities?.retryPolicySnapshotApiVersion !== 1 ||
 		manifest.capabilities?.compactionFailureResultApiVersion !== 1 ||
 		!Array.isArray(manifest.packages)
 	) {
