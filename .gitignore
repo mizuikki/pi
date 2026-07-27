@@ -51,3 +51,4 @@ collect.sh
 .pi/prompts/trellis-*.md
 .pi/settings.json
 .trellis/
+.pi/WORKFLOW_MAIN.md
