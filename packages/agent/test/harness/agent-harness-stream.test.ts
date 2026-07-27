@@ -8,9 +8,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
-import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
 import { Session } from "../../src/harness/session/session.ts";
+import type { AgentHarnessOptions } from "../../src/harness/types.ts";
 import { calculateTool } from "../utils/calculate.ts";
 import { createAssistantMessage, createUserMessage } from "./session-test-utils.ts";
 
@@ -24,7 +24,7 @@ function newFaux(): FauxProviderHandle {
 	return faux;
 }
 
-function createHarness(options: ConstructorParameters<typeof AgentHarness>[0]): AgentHarness {
+function createHarness(options: AgentHarnessOptions): AgentHarness {
 	return new AgentHarness(options);
 }
 
@@ -50,7 +50,6 @@ describe("AgentHarness stream configuration", () => {
 		const session = new Session(new InMemorySessionStorage({ metadata: { id: "session-1", createdAt: "now" } }));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 			streamOptions: {
@@ -99,7 +98,6 @@ describe("AgentHarness stream configuration", () => {
 
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: new Session(new InMemorySessionStorage()),
 			model: registration.getModel(),
 			streamOptions: {
@@ -157,7 +155,6 @@ describe("AgentHarness stream configuration", () => {
 
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: new Session(new InMemorySessionStorage()),
 			model: registration.getModel(),
 			tools: [calculateTool],
@@ -192,7 +189,6 @@ describe("AgentHarness stream configuration", () => {
 
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: new Session(new InMemorySessionStorage()),
 			model: registration.getModel(),
 		});
@@ -237,7 +233,6 @@ describe("AgentHarness stream configuration", () => {
 		await session.appendMessage(createAssistantMessage("two"));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 		});
@@ -283,7 +278,6 @@ describe("AgentHarness stream configuration", () => {
 		await session.appendMessage(createAssistantMessage("two"));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 		});
@@ -316,7 +310,6 @@ describe("AgentHarness stream configuration", () => {
 		await session.appendMessage(createAssistantMessage("two"));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 		});
@@ -396,7 +389,6 @@ describe("AgentHarness stream configuration", () => {
 
 		const duplicateHarness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: new Session(new InMemorySessionStorage()),
 			model: registration.getModel(),
 		});
@@ -443,7 +435,6 @@ describe("AgentHarness stream configuration", () => {
 		await missingSession.appendMessage(createAssistantMessage("two"));
 		const missingHarness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: missingSession,
 			model: registration.getModel(),
 		});
@@ -486,7 +477,6 @@ describe("AgentHarness stream configuration", () => {
 		await alteredSession.appendMessage(createAssistantMessage("two"));
 		const alteredHarness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session: alteredSession,
 			model: registration.getModel(),
 		});
@@ -537,7 +527,6 @@ describe("AgentHarness stream configuration", () => {
 		await session.appendMessage(createAssistantMessage("two"));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 		});
@@ -590,7 +579,6 @@ describe("AgentHarness stream configuration", () => {
 		await session.appendMessage(createUserMessage("five"));
 		const harness = createHarness({
 			models,
-			env: new NodeExecutionEnv({ cwd: process.cwd() }),
 			session,
 			model: registration.getModel(),
 		});

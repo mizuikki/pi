@@ -716,6 +716,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return getModel();
 			},
+			get thinkingLevel() {
+				runner.assertActive();
+				return runner.runtime.getThinkingLevel();
+			},
 			isIdle: () => {
 				runner.assertActive();
 				return runner.isIdleFn();
