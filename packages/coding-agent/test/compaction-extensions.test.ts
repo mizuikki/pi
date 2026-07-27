@@ -535,8 +535,8 @@ describe("Provider payload compaction extensions", () => {
 							payload: { steps: ["provider", "checkpointed"] },
 							providerCheckpoint: {
 								token: event.attribution.compaction.token,
-								customType: "fixture.provider-checkpoint",
-								checkpointId: "fixture-checkpoint-1",
+								customType: " fixture.provider-checkpoint ",
+								checkpointId: " fixture-checkpoint-1 ",
 								data: { kind: "fixture", version: 1 },
 							},
 						};
@@ -569,7 +569,7 @@ describe("Provider payload compaction extensions", () => {
 			customType: "fixture.provider-checkpoint",
 			data: { kind: "fixture", version: 1 },
 		});
-		expect(checkpointEvents).toHaveLength(1);
+		expect(checkpointEvents).toEqual([expect.objectContaining({ checkpointId: "fixture-checkpoint-1" })]);
 	});
 
 	it("rejects mixed provider checkpoint and textual proposals", async () => {

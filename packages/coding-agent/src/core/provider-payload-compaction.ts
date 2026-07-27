@@ -63,16 +63,16 @@ function normalizeTokensBefore(tokensBefore: unknown): number {
 }
 
 function normalizeCheckpointField(value: unknown, label: string): string {
+	const normalized = typeof value === "string" ? value.trim() : "";
 	if (
 		typeof value !== "string" ||
-		value.length === 0 ||
+		normalized.length === 0 ||
 		value.length > 256 ||
-		value.trim().length === 0 ||
 		/[\u0000-\u001f\u007f]/.test(value)
 	) {
 		throw new Error(`Provider checkpoint ${label} is invalid`);
 	}
-	return value;
+	return normalized;
 }
 
 export class ProviderPayloadCompactionController {
