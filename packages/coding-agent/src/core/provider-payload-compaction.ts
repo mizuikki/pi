@@ -22,6 +22,7 @@ interface ProviderInlineCompactionSnapshot {
 	modelId: string;
 	leafId: string;
 	firstKeptEntryId: string;
+	tokensBefore: number;
 	retainedTail: readonly AgentMessage[];
 	consumed: boolean;
 }
@@ -111,6 +112,7 @@ export class ProviderPayloadCompactionController {
 			modelId: model.id,
 			leafId,
 			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
 			retainedTail: preparation.retainedTail,
 		});
 		const candidateRetainedTail = cloneAndFreezeMessages(preparation.retainedTail);
@@ -304,6 +306,9 @@ export class ProviderPayloadCompactionController {
 				entry: savedEntry,
 				checkpointId,
 				trigger,
+				reason: trigger,
+				tokensBefore: snapshot.tokensBefore,
+				...(proposal.usage === undefined ? {} : { usage: proposal.usage }),
 				willRetry,
 			});
 			return savedEntry;

@@ -572,6 +572,113 @@ describe("Provider payload compaction extensions", () => {
 		expect(checkpointEvents).toHaveLength(1);
 	});
 
+	it("rejects mixed provider checkpoint and textual proposals", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first reply"), fauxAssistantMessage("second reply")]);
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+		const controller = (
+			harness.session as unknown as {
+				_providerPayloadCompaction: {
+					createAttribution: (
+						model: unknown,
+						origin: "agent",
+						signal: AbortSignal,
+					) => {
+						compaction?: { token: unknown };
+					};
+					commitPayload: (model: unknown, result: unknown, attribution: unknown) => Promise<unknown>;
+				};
+			}
+		)._providerPayloadCompaction;
+		const signal = new AbortController().signal;
+		const attribution = controller.createAttribution(harness.getModel(), "agent", signal);
+		const token = attribution.compaction?.token;
+		expect(token).toBeDefined();
+
+		await expect(
+			controller.commitPayload(
+				harness.getModel(),
+				{
+					payload: { steps: ["provider"] },
+					compaction: { token, summary: "summary", tokensBefore: 1 },
+					providerCheckpoint: {
+						token,
+						customType: "fixture.provider-checkpoint",
+						checkpointId: "fixture-checkpoint",
+						data: { version: 1 },
+					},
+				},
+				attribution,
+			),
+		).rejects.toThrow("mutually exclusive");
+	});
+
+	it("blocks payload dispatch after indeterminate provider checkpoint readback", async () => {
+		const events: unknown[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					(
+						pi.on as unknown as (
+							event: "session_provider_checkpoint_indeterminate",
+							handler: (event: unknown) => void,
+						) => void
+					)("session_provider_checkpoint_indeterminate", (event) => events.push(event));
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first reply"), fauxAssistantMessage("second reply")]);
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+		const controller = (
+			harness.session as unknown as {
+				_providerPayloadCompaction: {
+					createAttribution: (
+						model: unknown,
+						origin: "agent",
+						signal: AbortSignal,
+					) => {
+						compaction?: { token: unknown };
+					};
+					commitPayload: (model: unknown, result: unknown, attribution: unknown) => Promise<unknown>;
+				};
+			}
+		)._providerPayloadCompaction;
+		const manager = harness.sessionManager as unknown as {
+			getEntry: (id: string) => unknown;
+		};
+		manager.getEntry = () => undefined;
+		const signal = new AbortController().signal;
+		const attribution = controller.createAttribution(harness.getModel(), "agent", signal);
+		const token = attribution.compaction?.token;
+
+		await expect(
+			controller.commitPayload(
+				harness.getModel(),
+				{
+					payload: { steps: ["provider", "sealed"] },
+					providerCheckpoint: {
+						token,
+						customType: "fixture.provider-checkpoint",
+						checkpointId: "fixture-indeterminate",
+						data: { version: 1 },
+					},
+				},
+				attribution,
+			),
+		).rejects.toThrow("could not be verified after append");
+		expect(events).toHaveLength(1);
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.filter((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint"),
+		).toHaveLength(1);
+	});
+
 	it("rejects payload mutation after an inline compaction proposal", async () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },

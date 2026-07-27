@@ -95,7 +95,18 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
+async function createRuntimeHost(options: {
+	withAuth: boolean;
+	responseDelayMs: number;
+	model?: Model<any>;
+	compactResult?: {
+		kind: "provider_checkpoint";
+		entryId: string;
+		checkpointId: string;
+		tokensBefore: number;
+		willRetry: boolean;
+	};
+}): Promise<{
 	runtimeHost: AgentSessionRuntime;
 	cleanup: () => Promise<void>;
 }> {
@@ -142,6 +153,9 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 		modelRuntime: getModelRuntime(modelRegistry),
 		resourceLoader: createTestResourceLoader(),
 	});
+	if (options.compactResult) {
+		vi.spyOn(session, "compact").mockResolvedValue(options.compactResult);
+	}
 
 	const runtimeHost = {
 		session,
@@ -170,7 +184,18 @@ async function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: 
 	};
 }
 
-async function startRpcMode(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
+async function startRpcMode(options: {
+	withAuth: boolean;
+	responseDelayMs: number;
+	model?: Model<any>;
+	compactResult?: {
+		kind: "provider_checkpoint";
+		entryId: string;
+		checkpointId: string;
+		tokensBefore: number;
+		willRetry: boolean;
+	};
+}): Promise<{
 	lineHandler: (line: string) => void;
 	cleanup: () => Promise<void>;
 }> {
@@ -281,6 +306,40 @@ describe("RPC prompt response semantics", () => {
 			});
 
 			await sleep(150);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("returns provider checkpoint outcomes from compact", async () => {
+		const checkpoint = {
+			kind: "provider_checkpoint" as const,
+			entryId: "checkpoint-entry",
+			checkpointId: "checkpoint-id",
+			tokensBefore: 321,
+			willRetry: false,
+		};
+		const { lineHandler, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 0,
+			compactResult: checkpoint,
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "compact-1", type: "compact" }));
+
+			await vi.waitFor(() => {
+				const response = parseOutputLines(rpcIo.outputLines).find(
+					(record) => record.id === "compact-1" && record.command === "compact",
+				);
+				expect(response).toMatchObject({
+					id: "compact-1",
+					type: "response",
+					command: "compact",
+					success: true,
+					data: checkpoint,
+				});
+			});
 		} finally {
 			await cleanup();
 		}

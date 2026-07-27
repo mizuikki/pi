@@ -181,6 +181,8 @@ describe("AgentSession.getSessionStats", () => {
 			).setProviderCheckpointUsageBoundary.bind(session);
 			expect(setBoundary(checkpointId)).toBe(true);
 			expect(session.getContextUsage()?.tokens).toBeNull();
+			expect(setBoundary("missing-entry")).toBe(false);
+			expect(session.getContextUsage()?.tokens).toBeNull();
 
 			sessionManager.appendMessage(createAssistantMessage("response2", 25_000, 4));
 			syncAgentMessages(session, sessionManager);

@@ -10,6 +10,7 @@
 
 - Added trusted session attribution and request-origin metadata to `before_provider_request`, including manual/automatic compaction, turn-prefix, and branch-summary provider calls.
 - Added the independently versioned retry-policy snapshot extension capability (`retryPolicySnapshotApiVersion: 1`), including `HostRetryPolicySnapshot` and the read-only `ExtensionContext.getRetryPolicy()` getter, without changing the common extension SDK ABI.
+- Added the independently versioned provider-checkpoint commit capability (`providerCheckpointCommitApiVersion: 1`) for atomic, context-invisible extension checkpoints and reconstructable context-usage boundaries.
 
 ### Changed
 
@@ -21,6 +22,7 @@
 - Fixed extension `session_start` actions (`sendMessage`/`sendUserMessage`) to settle before resource extension continues, with a 30s timeout and diagnostic on timeout.
 - Fixed `/reload` to clear extension-owned providers, refresh or clear the current model when it disappears, and invalidate the previous extension runner context.
 - Fixed auto-retry accounting across intermediate tool-use turns, targeted removal of failed assistant messages during retry/compaction, overflow compact-and-retry only for true errors, and `isIdle` considering compaction.
+- Fixed provider-checkpoint usage boundaries to suppress stale threshold and overflow checks until a later assistant response reports current usage.
 - Fixed aborted assistant display to copy the display message instead of mutating the session message in place.
 
 ## [0.82.1] - 2026-07-25

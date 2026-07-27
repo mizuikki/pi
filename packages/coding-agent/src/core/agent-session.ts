@@ -2106,9 +2106,19 @@ export class AgentSession {
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
 		// from retriggering compaction on the first prompt after compaction.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+		const branchEntries = this.sessionManager.getBranch();
+		const compactionEntry = getLatestCompactionEntry(branchEntries);
+		const providerCheckpointEntry =
+			this._providerCheckpointUsageBoundaryId === undefined
+				? undefined
+				: branchEntries.find((entry) => entry.id === this._providerCheckpointUsageBoundaryId);
+		const compactionBoundaryTimestamp = Math.max(
+			compactionEntry === null ? Number.NEGATIVE_INFINITY : new Date(compactionEntry.timestamp).getTime(),
+			providerCheckpointEntry === undefined
+				? Number.NEGATIVE_INFINITY
+				: new Date(providerCheckpointEntry.timestamp).getTime(),
+		);
+		const assistantIsFromBeforeCompaction = assistantMessage.timestamp <= compactionBoundaryTimestamp;
 		if (assistantIsFromBeforeCompaction) {
 			return false;
 		}
@@ -2158,9 +2168,9 @@ export class AgentSession {
 			// trigger compaction right after one just finished.
 			const usageMsg = messages[estimate.lastUsageIndex];
 			if (
-				compactionEntry &&
+				Number.isFinite(compactionBoundaryTimestamp) &&
 				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+				(usageMsg as AssistantMessage).timestamp <= compactionBoundaryTimestamp
 			) {
 				return false;
 			}

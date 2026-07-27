@@ -483,6 +483,11 @@ pi.on("session_compact", async (event, ctx) => {
   // event.trigger - same values as event.reason
   // event.willRetry - whether the aborted turn is retried after compaction (overflow recovery)
 });
+
+pi.on("session_provider_checkpoint", async (event, ctx) => {
+  // Emitted only after exact CustomEntry readback verification.
+  // event.entry, checkpointId, trigger, reason, tokensBefore, usage, willRetry
+});
 ```
 
 #### session_before_tree / session_tree
@@ -711,6 +716,29 @@ compaction proposal. A handler may return:
   }
 }
 ```
+
+Hosts with `providerCheckpointCommitApiVersion: 1` also accept a mutually exclusive
+`providerCheckpoint` proposal. Pi seals the rewritten payload, validates the single-use token,
+appends and reads back the `CustomEntry`, records its entry ID as a usage epoch, emits
+`session_provider_checkpoint`, and only then permits provider dispatch:
+
+```typescript
+{
+  payload: rewrittenPayload,
+  providerCheckpoint: {
+    token: event.attribution.compaction.token,
+    customType: "my-extension.remote-checkpoint",
+    checkpointId: "opaque-checkpoint-id",
+    data: checkpointData,
+    usage: optionalPiUsage,
+  }
+}
+```
+
+Call `pi.setProviderCheckpointUsageBoundary(entryId)` after reload, tree navigation, or an identity
+change to restore a verified active-branch boundary. Call it without an ID to clear the boundary. Pi
+does not parse custom checkpoint data or project it into model context. Append/readback uncertainty
+emits `session_provider_checkpoint_indeterminate` and blocks dispatch without retrying the append.
 
 Pi validates freshness, rematerializes the retained tail, persists the real compaction entry, emits
 `session_compact`, and only then allows final provider dispatch. Auxiliary requests never receive a
@@ -1415,7 +1443,11 @@ before registering tools, commands, or event handlers:
 
 ```typescript
 export default function extension(pi: ExtensionAPI) {
-  if (pi.extensionSdkApiVersion !== 1 || pi.retryPolicySnapshotApiVersion !== 1) {
+  if (
+    pi.extensionSdkApiVersion !== 1 ||
+    pi.retryPolicySnapshotApiVersion !== 1 ||
+    pi.providerCheckpointCommitApiVersion !== 1
+  ) {
     throw new Error("Incompatible Pi extension host");
   }
 
@@ -1426,6 +1458,10 @@ export default function extension(pi: ExtensionAPI) {
 Adding `retryPolicySnapshotApiVersion: 1` does not change
 `extensionSdkApiVersion`; extensions that do not consume retry snapshots do not
 need to adopt the feature capability.
+
+Likewise, `providerCheckpointCommitApiVersion: 1` is optional and independently versioned. Extensions
+that require atomic custom checkpoint commits must preflight it before registration and verify that
+`setProviderCheckpointUsageBoundary` is available.
 
 ### pi.on(event, handler)
 

@@ -643,6 +643,9 @@ export interface SessionProviderCheckpointEvent {
 	entry: CustomEntry;
 	checkpointId: string;
 	trigger: CompactionTrigger;
+	reason: CompactionTrigger;
+	tokensBefore: number;
+	usage?: Usage;
 	willRetry: boolean;
 }
 
@@ -751,6 +754,7 @@ export interface ProviderCheckpointProposal {
 	customType: string;
 	checkpointId: string;
 	data: unknown;
+	usage?: Usage;
 }
 
 /** Fired before a provider request is sent. Can replace the payload. */
