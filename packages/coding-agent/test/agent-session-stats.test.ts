@@ -163,6 +163,35 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	it("uses post-checkpoint usage for current context instead of stale prior usage", async () => {
+		const { session, sessionManager } = await createSession();
+
+		try {
+			sessionManager.appendMessage(createUserMessage("first", 1));
+			sessionManager.appendMessage(createAssistantMessage("response1", 180_000, 2));
+			const checkpointId = sessionManager.appendCustomEntry("fixture.provider-checkpoint", {
+				kind: "fixture.provider-checkpoint",
+				version: 1,
+			});
+			sessionManager.appendMessage(createUserMessage("second", 3));
+			syncAgentMessages(session, sessionManager);
+
+			const setBoundary = (
+				session as unknown as { setProviderCheckpointUsageBoundary: (entryId?: string) => boolean }
+			).setProviderCheckpointUsageBoundary.bind(session);
+			expect(setBoundary(checkpointId)).toBe(true);
+			expect(session.getContextUsage()?.tokens).toBeNull();
+			expect(setBoundary("missing-entry")).toBe(false);
+			expect(session.getContextUsage()?.tokens).toBeNull();
+
+			sessionManager.appendMessage(createAssistantMessage("response2", 25_000, 4));
+			syncAgentMessages(session, sessionManager);
+			expect(session.getContextUsage()?.tokens).toBe(25_000);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("includes branch summary usage in session totals", async () => {
 		const { session, sessionManager } = await createSession();
 

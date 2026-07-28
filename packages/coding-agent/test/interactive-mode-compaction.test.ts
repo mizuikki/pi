@@ -82,4 +82,62 @@ describe("InteractiveMode compaction events", () => {
 		expect(fakeThis.compactionQueuedMessages).toEqual([]);
 		expect(fakeThis.showError).not.toHaveBeenCalled();
 	});
+
+	test("reports provider checkpoints without rebuilding textual history", async () => {
+		const fakeThis = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			autoCompactionEscapeHandler: undefined as (() => void) | undefined,
+			autoCompactionLoader: undefined,
+			defaultEditor: {},
+			statusContainer: { clear: vi.fn() },
+			chatContainer: { clear: vi.fn(), addChild: vi.fn() },
+			rebuildChatFromMessages: vi.fn(),
+			addMessageToChat: vi.fn(),
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			clearStatusIndicator: vi.fn(),
+			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+		};
+
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: {
+				type: "compaction_end";
+				reason: "overflow";
+				result: {
+					kind: "provider_checkpoint";
+					entryId: string;
+					checkpointId: string;
+					tokensBefore: number;
+					willRetry: boolean;
+				};
+				aborted: boolean;
+				willRetry: boolean;
+			},
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, {
+			type: "compaction_end",
+			reason: "overflow",
+			result: {
+				kind: "provider_checkpoint",
+				entryId: "checkpoint-entry",
+				checkpointId: "checkpoint-id",
+				tokensBefore: 456,
+				willRetry: true,
+			},
+			aborted: false,
+			willRetry: true,
+		});
+
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Provider checkpoint saved");
+		expect(fakeThis.chatContainer.clear).not.toHaveBeenCalled();
+		expect(fakeThis.rebuildChatFromMessages).not.toHaveBeenCalled();
+		expect(fakeThis.addMessageToChat).not.toHaveBeenCalled();
+		expect(fakeThis.footer.invalidate).toHaveBeenCalled();
+		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: true });
+	});
 });

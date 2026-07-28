@@ -194,6 +194,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		setModel: () => Promise.reject(new Error("Extension runtime not initialized")),
 		getThinkingLevel: notInitialized,
 		setThinkingLevel: notInitialized,
+		setProviderCheckpointUsageBoundary: notInitialized,
 		flagValues: new Map(),
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
@@ -245,6 +246,8 @@ function createExtensionAPI(
 		// This is intentionally part of the runtime API rather than package-version detection:
 		// a fork can preserve package versions while extending the extension contract.
 		providerPayloadCompactionApiVersion: 1 as const,
+
+		providerCheckpointCommitApiVersion: 1 as const,
 
 		compactionFailureResultApiVersion: 1 as const,
 
@@ -328,6 +331,11 @@ function createExtensionAPI(
 		appendEntry(customType: string, data?: unknown): void {
 			runtime.assertActive();
 			runtime.appendEntry(customType, data);
+		},
+
+		setProviderCheckpointUsageBoundary(entryId?: string): boolean {
+			runtime.assertActive();
+			return runtime.setProviderCheckpointUsageBoundary(entryId);
 		},
 
 		setSessionName(name: string): void {

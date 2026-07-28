@@ -100,7 +100,7 @@ interface AgentSession {
   navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
 
   // Compaction
-  compact(customInstructions?: string): Promise<CompactionResult>;
+  compact(customInstructions?: string): Promise<CompactionOutcome>;
   abortCompaction(): void;
 
   // Abort current operation
@@ -110,6 +110,11 @@ interface AgentSession {
   dispose(): void;
 }
 ```
+
+`CompactionOutcome` is either the ordinary textual `CompactionResult` or a
+`ProviderCheckpointCompactionResult`. Provider-checkpoint success contains the verified custom entry
+ID, checkpoint ID, token count, optional usage, and `willRetry` state; it does not fabricate a textual
+summary or alter generic session projection.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
 

@@ -112,6 +112,7 @@ export type {
 	ProjectTrustEventDecision,
 	ProjectTrustEventResult,
 	ProjectTrustHandler,
+	ProviderCheckpointProposal,
 	ProviderCompactionCommitToken,
 	ProviderCompactionProposal,
 	// Provider Registration
@@ -143,6 +144,8 @@ export type {
 	SessionCompactIndeterminateEvent,
 	SessionEvent,
 	SessionInfoChangedEvent,
+	SessionProviderCheckpointEvent,
+	SessionProviderCheckpointIndeterminateEvent,
 	SessionShutdownEvent,
 	// Events - Session
 	SessionStartEvent,

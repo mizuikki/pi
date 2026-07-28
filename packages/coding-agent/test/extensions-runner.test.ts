@@ -86,6 +86,7 @@ describe("ExtensionRunner", () => {
 		setModel: async () => false,
 		getThinkingLevel: () => "off",
 		setThinkingLevel: () => {},
+		setProviderCheckpointUsageBoundary: () => true,
 	};
 
 	const extensionContextActions: ExtensionContextActions = {

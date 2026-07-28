@@ -53,6 +53,7 @@ import { sleep } from "../utils/sleep.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
+	type CompactionOutcome,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
@@ -62,6 +63,7 @@ import {
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
+	type TextualCompactionResult,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
@@ -118,6 +120,7 @@ function extensionCompactionFailureMessage(result: SessionBeforeCompactResult | 
 	if (
 		result.cancel !== true ||
 		result.compaction !== undefined ||
+		result.providerCheckpoint !== undefined ||
 		typeof result.errorMessage !== "string" ||
 		result.errorMessage.trim().length === 0 ||
 		result.errorMessage.length > MAX_EXTENSION_COMPACTION_ERROR_CHARS
@@ -175,7 +178,7 @@ export type AgentSessionEvent =
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
-			result: CompactionResult | undefined;
+			result: CompactionOutcome | undefined;
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;
@@ -370,6 +373,7 @@ export class AgentSession {
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _providerPayloadCompaction: ProviderPayloadCompactionController;
+	private _providerCheckpointUsageBoundaryId: string | undefined;
 	private _initialActiveToolNames?: string[];
 	private _allowedToolNames?: Set<string>;
 	private _excludedToolNames?: Set<string>;
@@ -1865,7 +1869,7 @@ export class AgentSession {
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
-	async compact(customInstructions?: string): Promise<CompactionResult> {
+	async compact(customInstructions?: string): Promise<CompactionOutcome> {
 		this._disconnectFromAgent();
 		await this.abort();
 		this._compactionAbortController = new AbortController();
@@ -1891,14 +1895,21 @@ export class AgentSession {
 				throw new Error("Nothing to compact (session too small)");
 			}
 
-			let extensionCompaction: CompactionResult | undefined;
+			let extensionCompaction: TextualCompactionResult | undefined;
 			let fromExtension = false;
+
+			const checkpointAttribution = this._providerPayloadCompaction.createAttribution(
+				this.model,
+				"agent",
+				this._compactionAbortController.signal,
+			);
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
 				const result = (await this._extensionRunner.emit({
 					type: "session_before_compact",
 					preparation,
 					branchEntries: pathEntries,
+					checkpointToken: checkpointAttribution.compaction?.token,
 					customInstructions,
 					reason: "manual",
 					trigger: "manual",
@@ -1914,8 +1925,34 @@ export class AgentSession {
 					throw new Error("Compaction cancelled");
 				}
 
+				if (result?.providerCheckpoint !== undefined) {
+					const entry = await this._providerPayloadCompaction.commitProviderCheckpoint(
+						this.model,
+						result.providerCheckpoint,
+						checkpointAttribution.compaction?.token,
+						this._compactionAbortController.signal,
+						"manual",
+						false,
+					);
+					const checkpointResult: CompactionOutcome = {
+						kind: "provider_checkpoint",
+						entryId: entry.id,
+						checkpointId: result.providerCheckpoint.checkpointId,
+						tokensBefore: preparation.tokensBefore,
+						willRetry: false,
+					};
+					this._emit({
+						type: "compaction_end",
+						reason: "manual",
+						result: checkpointResult,
+						aborted: false,
+						willRetry: false,
+					});
+					return checkpointResult;
+				}
+
 				if (result?.compaction) {
-					extensionCompaction = result.compaction;
+					extensionCompaction = result.compaction as TextualCompactionResult;
 					fromExtension = true;
 				}
 			}
@@ -2069,9 +2106,19 @@ export class AgentSession {
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
 		// from retriggering compaction on the first prompt after compaction.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+		const branchEntries = this.sessionManager.getBranch();
+		const compactionEntry = getLatestCompactionEntry(branchEntries);
+		const providerCheckpointEntry =
+			this._providerCheckpointUsageBoundaryId === undefined
+				? undefined
+				: branchEntries.find((entry) => entry.id === this._providerCheckpointUsageBoundaryId);
+		const compactionBoundaryTimestamp = Math.max(
+			compactionEntry === null ? Number.NEGATIVE_INFINITY : new Date(compactionEntry.timestamp).getTime(),
+			providerCheckpointEntry === undefined
+				? Number.NEGATIVE_INFINITY
+				: new Date(providerCheckpointEntry.timestamp).getTime(),
+		);
+		const assistantIsFromBeforeCompaction = assistantMessage.timestamp <= compactionBoundaryTimestamp;
 		if (assistantIsFromBeforeCompaction) {
 			return false;
 		}
@@ -2121,9 +2168,9 @@ export class AgentSession {
 			// trigger compaction right after one just finished.
 			const usageMsg = messages[estimate.lastUsageIndex];
 			if (
-				compactionEntry &&
+				Number.isFinite(compactionBoundaryTimestamp) &&
 				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+				(usageMsg as AssistantMessage).timestamp <= compactionBoundaryTimestamp
 			) {
 				return false;
 			}
@@ -2173,7 +2220,12 @@ export class AgentSession {
 			this._autoCompactionAbortController = new AbortController();
 			started = true;
 
-			let extensionCompaction: CompactionResult | undefined;
+			const checkpointAttribution = this._providerPayloadCompaction.createAttribution(
+				this.model,
+				"agent",
+				this._autoCompactionAbortController.signal,
+			);
+			let extensionCompaction: TextualCompactionResult | undefined;
 			let fromExtension = false;
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
@@ -2181,6 +2233,7 @@ export class AgentSession {
 					type: "session_before_compact",
 					preparation,
 					branchEntries: pathEntries,
+					checkpointToken: checkpointAttribution.compaction?.token,
 					customInstructions: undefined,
 					reason,
 					trigger: reason,
@@ -2203,8 +2256,29 @@ export class AgentSession {
 					return false;
 				}
 
+				if (extensionResult?.providerCheckpoint !== undefined) {
+					const entry = await this._providerPayloadCompaction.commitProviderCheckpoint(
+						this.model,
+						extensionResult.providerCheckpoint,
+						checkpointAttribution.compaction?.token,
+						this._autoCompactionAbortController.signal,
+						reason,
+						willRetry,
+					);
+					const checkpointResult: CompactionOutcome = {
+						kind: "provider_checkpoint",
+						entryId: entry.id,
+						checkpointId: extensionResult.providerCheckpoint.checkpointId,
+						tokensBefore: preparation.tokensBefore,
+						willRetry,
+					};
+					this._emit({ type: "compaction_end", reason, result: checkpointResult, aborted: false, willRetry });
+					if (willRetry && retryMessage) this._removeAssistantMessageFromLiveState(retryMessage);
+					return willRetry ? true : this.agent.hasQueuedMessages();
+				}
+
 				if (extensionResult?.compaction) {
-					extensionCompaction = extensionResult.compaction;
+					extensionCompaction = extensionResult.compaction as TextualCompactionResult;
 					fromExtension = true;
 				}
 			}
@@ -2560,6 +2634,7 @@ export class AgentSession {
 				},
 				getThinkingLevel: () => this.thinkingLevel,
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
+				setProviderCheckpointUsageBoundary: (entryId) => this.setProviderCheckpointUsageBoundary(entryId),
 			},
 			{
 				getModel: () => this.model,
@@ -3335,12 +3410,17 @@ export class AgentSession {
 		// If no such assistant exists, context token count is unknown until the next LLM response.
 		const branchEntries = this.sessionManager.getBranch();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
+		const providerCheckpointIndex =
+			this._providerCheckpointUsageBoundaryId === undefined
+				? -1
+				: branchEntries.findIndex((entry) => entry.id === this._providerCheckpointUsageBoundaryId);
+		const compactionIndex = latestCompaction === null ? -1 : branchEntries.lastIndexOf(latestCompaction);
+		const usageBoundaryIndex = Math.max(compactionIndex, providerCheckpointIndex);
 
-		if (latestCompaction) {
+		if (usageBoundaryIndex >= 0) {
 			// Check if there's a valid assistant usage after the compaction boundary
-			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
 			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
+			for (let i = branchEntries.length - 1; i > usageBoundaryIndex; i--) {
 				const entry = branchEntries[i];
 				if (entry.type === "message" && entry.message.role === "assistant") {
 					const assistant = entry.message;
@@ -3367,6 +3447,18 @@ export class AgentSession {
 			contextWindow,
 			percent,
 		};
+	}
+
+	private setProviderCheckpointUsageBoundary(entryId?: string): boolean {
+		if (entryId === undefined) {
+			this._providerCheckpointUsageBoundaryId = undefined;
+			return true;
+		}
+		const branch = this.sessionManager.getBranch();
+		const entry = branch.find((candidate) => candidate.id === entryId);
+		if (entry?.type !== "custom") return false;
+		this._providerCheckpointUsageBoundaryId = entryId;
+		return true;
 	}
 
 	/**

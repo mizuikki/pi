@@ -589,6 +589,48 @@ describe("createBranchedSession", () => {
 		}
 	});
 
+	it("keeps custom entries branch-local and context-invisible across reload and fork", () => {
+		const tempDir = join(tmpdir(), `session-custom-checkpoint-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+
+		try {
+			const session = SessionManager.create(tempDir, tempDir);
+			const rootId = session.appendMessage(userMsg("root"));
+			const checkpointId = session.appendCustomEntry("fixture.remote-compaction", {
+				kind: "fixture.remote-compaction",
+				version: 1,
+			});
+			const leafId = session.appendMessage(assistantMsg("after checkpoint"));
+			const sessionFile = session.getSessionFile();
+			expect(sessionFile).toBeDefined();
+
+			const reopened = SessionManager.open(sessionFile!, tempDir);
+			expect(reopened.getBranch().map((entry) => entry.id)).toEqual([rootId, checkpointId, leafId]);
+			expect(reopened.getEntries().find((entry) => entry.id === checkpointId)).toMatchObject({
+				type: "custom",
+				customType: "fixture.remote-compaction",
+			});
+			expect(reopened.buildSessionContext().messages).toHaveLength(2);
+
+			reopened.branch(rootId);
+			expect(reopened.getBranch().map((entry) => entry.id)).toEqual([rootId]);
+			reopened.branch(checkpointId);
+			expect(reopened.getFullActivePathSnapshot().map((entry) => entry.id)).toEqual([rootId, checkpointId]);
+
+			const forkFile = reopened.createBranchedSession(leafId);
+			expect(forkFile).toBeDefined();
+			const forked = SessionManager.open(forkFile!, tempDir);
+			expect(forked.getFullActivePathSnapshot().map((entry) => entry.type)).toEqual([
+				"message",
+				"custom",
+				"message",
+			]);
+			expect(forked.buildSessionContext().messages).toHaveLength(2);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("writes file immediately when forking from a point with assistant messages", () => {
 		const tempDir = join(tmpdir(), `session-fork-with-assistant-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });

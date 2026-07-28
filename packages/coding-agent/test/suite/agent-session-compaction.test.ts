@@ -11,7 +11,11 @@ import { createHarness, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
-	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+	_runAutoCompaction: (
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		retryMessage?: AssistantMessage,
+	) => Promise<boolean>;
 };
 
 function createUsage(totalTokens: number) {
@@ -132,7 +136,7 @@ describe("AgentSession compaction characterization", () => {
 		const compactionEntries = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
 		const estimatedTokensAfter = harness.session.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 
-		expect(result.summary).toBe("summary from extension");
+		expect((result as { summary: string }).summary).toBe("summary from extension");
 		expect(result.usage).toEqual(summaryUsage);
 		expect(result.estimatedTokensAfter).toBe(estimatedTokensAfter);
 		expect(compactionEntries).toHaveLength(1);
@@ -147,6 +151,127 @@ describe("AgentSession compaction characterization", () => {
 		expect(statsAfter.tokens.cacheWrite).toBe(statsBefore.tokens.cacheWrite + summaryUsage.cacheWrite);
 		expect(statsAfter.cost).toBe(statsBefore.cost + summaryUsage.cost.total);
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
+	});
+
+	it("manually commits an extension provider checkpoint as a custom entry", async () => {
+		const checkpointEvents: unknown[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						providerCheckpoint: {
+							token: event.checkpointToken!,
+							customType: "fixture.provider-checkpoint",
+							checkpointId: "fixture-checkpoint-1",
+							data: { kind: "fixture", version: 1 },
+						},
+					}));
+					(pi.on as unknown as (event: "session_provider_checkpoint", handler: (event: unknown) => void) => void)(
+						"session_provider_checkpoint",
+						(event) => checkpointEvents.push(event),
+					);
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+
+		const result = await harness.session.compact();
+
+		expect(result).toMatchObject({ kind: "provider_checkpoint", checkpointId: "fixture-checkpoint-1" });
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.find((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint"),
+		).toMatchObject({ data: { kind: "fixture", version: 1 } });
+		expect(checkpointEvents).toHaveLength(1);
+		expect(checkpointEvents[0]).toMatchObject({
+			type: "session_provider_checkpoint",
+			checkpointId: "fixture-checkpoint-1",
+			trigger: "manual",
+			reason: "manual",
+			tokensBefore: expect.any(Number),
+			willRetry: false,
+		});
+	});
+
+	it("blocks manual success when provider checkpoint readback is indeterminate", async () => {
+		const indeterminateEvents: unknown[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						providerCheckpoint: {
+							token: event.checkpointToken!,
+							customType: "fixture.provider-checkpoint",
+							checkpointId: "fixture-indeterminate",
+							data: { kind: "fixture", version: 1 },
+						},
+					}));
+					pi.on("session_provider_checkpoint_indeterminate", (event) => {
+						indeterminateEvents.push(event);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const manager = harness.sessionManager as unknown as {
+			getEntry: (id: string) => unknown;
+		};
+		manager.getEntry = () => undefined;
+
+		await expect(harness.session.compact()).rejects.toThrow(
+			"Provider checkpoint append could not be verified after append",
+		);
+		expect(indeterminateEvents).toHaveLength(1);
+		expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
+			reason: "manual",
+			result: undefined,
+			willRetry: false,
+		});
+	});
+
+	it("settles an overflow provider checkpoint before allowing the one turn retry", async () => {
+		const order: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => ({
+						providerCheckpoint: {
+							token: event.checkpointToken!,
+							customType: "fixture.provider-checkpoint",
+							checkpointId: "fixture-overflow",
+							data: { kind: "fixture", version: 1 },
+						},
+					}));
+					pi.on("session_provider_checkpoint", (event) => {
+						order.push(`checkpoint:${String(event.willRetry)}`);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const retryMessage = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "prompt is too long",
+			timestamp: Date.now(),
+		});
+		harness.session.agent.state.messages.push(retryMessage);
+		harness.session.subscribe((event) => {
+			if (event.type === "compaction_end") order.push(`end:${String(event.willRetry)}`);
+		});
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await expect(internals._runAutoCompaction("overflow", true, retryMessage)).resolves.toBe(true);
+
+		expect(order).toEqual(["checkpoint:true", "end:true"]);
+		expect(harness.session.agent.state.messages).not.toContain(retryMessage);
 	});
 
 	it("routes an extension compaction failure through one manual error event without fallback", async () => {
@@ -299,7 +424,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const result = await harness.session.compact();
 
-		expect(result.summary).toContain("summary from custom stream");
+		expect((result as { summary: string }).summary).toContain("summary from custom stream");
 		expect(getStreamCallCount()).toBe(1);
 	});
 
@@ -334,7 +459,7 @@ describe("AgentSession compaction characterization", () => {
 
 		const result = await harness.session.compact();
 
-		expect(result.summary).toContain("summary with bearer auth");
+		expect((result as { summary: string }).summary).toContain("summary with bearer auth");
 		expect(harness.faux.state.callCount).toBe(1);
 	});
 
@@ -557,6 +682,31 @@ describe("AgentSession compaction characterization", () => {
 			timestamp: Date.now(),
 		});
 
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+
+		await sessionInternals._checkCompaction(staleAssistant, false);
+
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+	});
+
+	it("ignores stale assistant overflow and usage before a provider checkpoint boundary", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals & {
+			setProviderCheckpointUsageBoundary: (entryId?: string) => boolean;
+		};
+		const staleAssistant = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "prompt is too long",
+			totalTokens: 610_000,
+			timestamp: Date.now() - 10_000,
+		});
+		harness.sessionManager.appendMessage(staleAssistant);
+		const checkpointEntryId = harness.sessionManager.appendCustomEntry("fixture.provider-checkpoint", {
+			kind: "fixture.provider-checkpoint",
+			version: 1,
+		});
+		expect(sessionInternals.setProviderCheckpointUsageBoundary(checkpointEntryId)).toBe(true);
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
 		await sessionInternals._checkCompaction(staleAssistant, false);

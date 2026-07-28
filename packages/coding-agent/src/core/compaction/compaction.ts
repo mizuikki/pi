@@ -84,7 +84,7 @@ function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | u
 	return sessionEntryToContextMessages(entry)[0];
 }
 
-/** Result from compact() - SessionManager adds uuid/parentUuid when saving */
+/** Result from a textual compaction - SessionManager adds uuid/parentUuid when saving. */
 export interface CompactionResult<T = unknown> {
 	summary: string;
 	firstKeptEntryId: string;
@@ -96,6 +96,20 @@ export interface CompactionResult<T = unknown> {
 	/** Extension-specific data (e.g., ArtifactIndex, version markers for structured compaction) */
 	details?: T;
 }
+
+/** Result from an extension-owned, context-invisible provider checkpoint. */
+export interface ProviderCheckpointCompactionResult {
+	kind: "provider_checkpoint";
+	entryId: string;
+	checkpointId: string;
+	tokensBefore: number;
+	estimatedTokensAfter?: number;
+	usage?: Usage;
+	willRetry: boolean;
+}
+
+export type TextualCompactionResult<T = unknown> = CompactionResult<T>;
+export type CompactionOutcome<T = unknown> = CompactionResult<T> | ProviderCheckpointCompactionResult;
 
 function combineUsage(first: Usage, second: Usage): Usage {
 	return {

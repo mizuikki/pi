@@ -18,6 +18,7 @@ test("readLocalSdkManifest rejects duplicate SDK package names", () => {
 				capabilities: {
 					extensionSdkApiVersion: 1,
 					retryPolicySnapshotApiVersion: 1,
+					providerCheckpointCommitApiVersion: 1,
 					compactionFailureResultApiVersion: 1,
 				},
 				packages: [
