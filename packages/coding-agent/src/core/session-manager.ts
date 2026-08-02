@@ -106,6 +106,30 @@ export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
 	customType: string;
 	data?: T;
+	navigation?: SessionEntryNavigation;
+}
+
+/** Host-owned navigation metadata for otherwise opaque custom entries. */
+export interface SessionEntryNavigation {
+	role: "provider_checkpoint";
+	tokensBefore: number;
+}
+
+export function isProviderCheckpointNavigation(value: unknown): value is SessionEntryNavigation {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as { role?: unknown; tokensBefore?: unknown };
+	return (
+		candidate.role === "provider_checkpoint" &&
+		typeof candidate.tokensBefore === "number" &&
+		Number.isFinite(candidate.tokensBefore) &&
+		candidate.tokensBefore >= 0
+	);
+}
+
+export function isProviderCheckpointEntry(
+	entry: SessionEntry,
+): entry is CustomEntry & { navigation: SessionEntryNavigation } {
+	return entry.type === "custom" && isProviderCheckpointNavigation(entry.navigation);
 }
 
 /** Label entry for user-defined bookmarks/markers on entries. */
@@ -1130,11 +1154,12 @@ export class SessionManager {
 	}
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
-	appendCustomEntry(customType: string, data?: unknown): string {
+	appendCustomEntry(customType: string, data?: unknown, navigation?: SessionEntryNavigation): string {
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
 			data,
+			navigation,
 			id: generateId(this.byId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),

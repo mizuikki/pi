@@ -115,6 +115,20 @@ describe("SessionManager append and tree traversal", () => {
 			expect(entries[2].parentId).toBe(customId);
 		});
 
+		it("appendCustomEntry persists provider checkpoint navigation metadata", () => {
+			const session = SessionManager.inMemory();
+			const customId = session.appendCustomEntry(
+				"fixture.provider-checkpoint",
+				{ private: true },
+				{ role: "provider_checkpoint", tokensBefore: 12_345 },
+			);
+
+			expect(session.getEntry(customId)).toMatchObject({
+				type: "custom",
+				navigation: { role: "provider_checkpoint", tokensBefore: 12_345 },
+			});
+		});
+
 		it("leaf pointer advances after each append", () => {
 			const session = SessionManager.inMemory();
 
@@ -596,10 +610,14 @@ describe("createBranchedSession", () => {
 		try {
 			const session = SessionManager.create(tempDir, tempDir);
 			const rootId = session.appendMessage(userMsg("root"));
-			const checkpointId = session.appendCustomEntry("fixture.remote-compaction", {
-				kind: "fixture.remote-compaction",
-				version: 1,
-			});
+			const checkpointId = session.appendCustomEntry(
+				"fixture.remote-compaction",
+				{
+					kind: "fixture.remote-compaction",
+					version: 1,
+				},
+				{ role: "provider_checkpoint", tokensBefore: 12_345 },
+			);
 			const leafId = session.appendMessage(assistantMsg("after checkpoint"));
 			const sessionFile = session.getSessionFile();
 			expect(sessionFile).toBeDefined();
@@ -609,6 +627,7 @@ describe("createBranchedSession", () => {
 			expect(reopened.getEntries().find((entry) => entry.id === checkpointId)).toMatchObject({
 				type: "custom",
 				customType: "fixture.remote-compaction",
+				navigation: { role: "provider_checkpoint", tokensBefore: 12_345 },
 			});
 			expect(reopened.buildSessionContext().messages).toHaveLength(2);
 
@@ -625,6 +644,9 @@ describe("createBranchedSession", () => {
 				"custom",
 				"message",
 			]);
+			expect(forked.getEntry(checkpointId)).toMatchObject({
+				navigation: { role: "provider_checkpoint", tokensBefore: 12_345 },
+			});
 			expect(forked.buildSessionContext().messages).toHaveLength(2);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });

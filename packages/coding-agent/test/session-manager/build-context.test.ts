@@ -94,6 +94,20 @@ describe("buildSessionContext", () => {
 			expect(ctx.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
 		});
 
+		it("keeps provider checkpoint navigation entries out of model context", () => {
+			const checkpoint: CustomEntry = {
+				...custom("2", "1", "fixture.provider-checkpoint", { opaque: true }),
+				navigation: { role: "provider_checkpoint", tokensBefore: 12_345 },
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before"),
+				checkpoint,
+				msg("3", "2", "assistant", "after"),
+			];
+
+			expect(buildSessionContext(entries).messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+		});
+
 		it("tracks thinking level changes", () => {
 			const entries: SessionEntry[] = [
 				msg("1", null, "user", "hello"),

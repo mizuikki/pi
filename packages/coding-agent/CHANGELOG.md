@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Fixed verified provider checkpoints being hidden from session trees, while redacting their opaque payloads from HTML exports.
 - Fixed clipboard text paste fallback on Linux and Termux when native clipboard access is unavailable.
 - Fixed extension `session_start` actions (`sendMessage`/`sendUserMessage`) to settle before resource extension continues, with a 30s timeout and diagnostic on timeout.
 - Fixed `/reload` to clear extension-owned providers, refresh or clear the current model when it disappears, and invalidate the previous extension runner context.

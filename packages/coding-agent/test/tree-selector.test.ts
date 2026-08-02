@@ -3,6 +3,7 @@ import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type {
+	CustomEntry,
 	ModelChangeEntry,
 	SessionEntry,
 	SessionMessageEntry,
@@ -97,6 +98,18 @@ function modelChange(id: string, parentId: string | null): ModelChangeEntry {
 	};
 }
 
+function customEntry(id: string, parentId: string | null, navigation?: CustomEntry["navigation"]): CustomEntry {
+	return {
+		type: "custom",
+		id,
+		parentId,
+		timestamp: new Date().toISOString(),
+		customType: "fixture.provider-checkpoint",
+		data: { opaque: true },
+		navigation,
+	};
+}
+
 // Helper to build a tree from entries using parentId relationships
 function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
 	if (entries.length === 0) return [];
@@ -126,6 +139,81 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
 }
 
 describe("TreeSelectorComponent", () => {
+	describe("provider checkpoint navigation", () => {
+		const checkpointNavigation = { role: "provider_checkpoint", tokensBefore: 12_600 } as const;
+
+		test.each([
+			["default", "checkpoint-1"],
+			["default", "asst-1"],
+			["no-tools", "checkpoint-1"],
+			["no-tools", "asst-1"],
+		] as const)("shows checkpoints in %s mode with leaf %s", (mode, currentLeafId) => {
+			const entries = [
+				userMessage("user-1", null, "before"),
+				customEntry("checkpoint-1", "user-1", checkpointNavigation),
+				assistantMessage("asst-1", "checkpoint-1", "after"),
+			];
+			const selector = new TreeSelectorComponent(
+				buildTree(entries),
+				currentLeafId,
+				24,
+				() => {},
+				() => {},
+				undefined,
+				undefined,
+				mode,
+			);
+
+			expect(selector.getTreeList().render(120).map(stripVTControlCharacters).join("\n")).toContain(
+				"[provider checkpoint: 13k tokens]",
+			);
+		});
+
+		test("finds and selects a checkpoint by provider terminology", () => {
+			const selected: string[] = [];
+			const selector = new TreeSelectorComponent(
+				buildTree([
+					userMessage("user-1", null, "before"),
+					customEntry("checkpoint-1", "user-1", checkpointNavigation),
+					assistantMessage("asst-1", "checkpoint-1", "after"),
+				]),
+				"asst-1",
+				24,
+				(entryId) => selected.push(entryId),
+				() => {},
+			);
+
+			for (const character of "provider checkpoint") selector.handleInput(character);
+			expect(selector.getTreeList().getSelectedNode()?.entry.id).toBe("checkpoint-1");
+			selector.handleInput("\r");
+			selector.handleInput("\x1b");
+			selector.handleInput("\x1b[A");
+			selector.handleInput("\r");
+			expect(selected).toEqual(["checkpoint-1", "user-1"]);
+		});
+
+		test("hides ordinary and malformed custom entries by default", () => {
+			const malformed = customEntry("malformed-1", "custom-1") as CustomEntry & { navigation: unknown };
+			malformed.navigation = { role: "provider_checkpoint", tokensBefore: Number.NaN };
+			const selector = new TreeSelectorComponent(
+				buildTree([
+					userMessage("user-1", null, "before"),
+					customEntry("custom-1", "user-1"),
+					malformed,
+					assistantMessage("asst-1", "malformed-1", "after"),
+				]),
+				"asst-1",
+				24,
+				() => {},
+				() => {},
+			);
+
+			const rendered = selector.getTreeList().render(120).map(stripVTControlCharacters).join("\n");
+			expect(rendered).not.toContain("fixture.provider-checkpoint");
+			expect(rendered).not.toContain("provider checkpoint");
+		});
+	});
+
 	describe("initial selection with metadata entries", () => {
 		test("focuses nearest visible ancestor when currentLeafId is a model_change with sibling branch", () => {
 			// Tree structure:
