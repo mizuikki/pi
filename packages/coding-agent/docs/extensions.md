@@ -739,6 +739,10 @@ Call `pi.setProviderCheckpointUsageBoundary(entryId)` after reload, tree navigat
 change to restore a verified active-branch boundary. Call it without an ID to clear the boundary. Pi
 does not parse custom checkpoint data or project it into model context. Append/readback uncertainty
 emits `session_provider_checkpoint_indeterminate` and blocks dispatch without retrying the append.
+Verified commits persist host-owned provider-checkpoint navigation metadata using Pi's trusted token
+snapshot. The default terminal and HTML session trees show that boundary, while HTML export removes
+the provider-owned checkpoint `data`. Checkpoints from older sessions without verified navigation
+metadata remain ordinary custom entries and are available through the `all` tree filter.
 
 Pi validates freshness, rematerializes the retained tail, persists the real compaction entry, emits
 `session_compact`, and only then allows final provider dispatch. Auxiliary requests never receive a

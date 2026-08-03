@@ -568,6 +568,10 @@ describe("Provider payload compaction extensions", () => {
 			type: "custom",
 			customType: "fixture.provider-checkpoint",
 			data: { kind: "fixture", version: 1 },
+			navigation: {
+				role: "provider_checkpoint",
+				tokensBefore: expect.any(Number),
+			},
 		});
 		expect(checkpointEvents).toEqual([expect.objectContaining({ checkpointId: "fixture-checkpoint-1" })]);
 	});

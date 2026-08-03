@@ -12,7 +12,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { SessionTreeNode } from "../../../core/session-manager.ts";
+import { isProviderCheckpointEntry, type SessionTreeNode } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { formatKeyText, keyHint } from "./keybinding-hints.ts";
@@ -339,6 +339,7 @@ class TreeList implements Component {
 		this.filteredNodes = this.flatNodes.filter((flatNode) => {
 			const entry = flatNode.node.entry;
 			const isCurrentLeaf = entry.id === this.currentLeafId;
+			const isProviderCheckpoint = isProviderCheckpointEntry(entry);
 
 			// Skip assistant messages with only tool calls (no text) unless error/aborted
 			// Always show current leaf so active position is visible
@@ -357,7 +358,7 @@ class TreeList implements Component {
 			// Entry types hidden in default view (settings/bookkeeping)
 			const isSettingsEntry =
 				entry.type === "label" ||
-				entry.type === "custom" ||
+				(entry.type === "custom" && !isProviderCheckpoint) ||
 				entry.type === "model_change" ||
 				entry.type === "thinking_level_change" ||
 				entry.type === "session_info";
@@ -604,7 +605,7 @@ class TreeList implements Component {
 				parts.push("thinking", entry.thinkingLevel);
 				break;
 			case "custom":
-				parts.push("custom", entry.customType);
+				parts.push(isProviderCheckpointEntry(entry) ? "provider checkpoint" : "custom", entry.customType);
 				break;
 			case "label":
 				parts.push("label", entry.label ?? "");
@@ -834,7 +835,12 @@ class TreeList implements Component {
 				result = theme.fg("dim", `[thinking: ${entry.thinkingLevel}]`);
 				break;
 			case "custom":
-				result = theme.fg("dim", `[custom: ${entry.customType}]`);
+				result = isProviderCheckpointEntry(entry)
+					? theme.fg(
+							"borderAccent",
+							`[provider checkpoint: ${Math.round(entry.navigation.tokensBefore / 1000)}k tokens]`,
+						)
+					: theme.fg("dim", `[custom: ${entry.customType}]`);
 				break;
 			case "label":
 				result = theme.fg("dim", `[label: ${entry.label ?? "(cleared)"}]`);

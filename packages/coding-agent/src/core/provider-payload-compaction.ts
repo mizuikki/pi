@@ -11,7 +11,7 @@ import type {
 	ProviderPayloadAttribution,
 	ProviderRequestOrigin,
 } from "./extensions/index.ts";
-import type { CustomEntry, SessionManager } from "./session-manager.ts";
+import type { CustomEntry, SessionEntryNavigation, SessionManager } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
 const providerCompactionTokenRuntimeBrand = Symbol("providerCompactionCommitToken");
@@ -282,18 +282,23 @@ export class ProviderPayloadCompactionController {
 	): Promise<CustomEntry> {
 		const customType = normalizeCheckpointField(proposal.customType, "custom type");
 		const checkpointId = normalizeCheckpointField(proposal.checkpointId, "ID");
+		const navigation: SessionEntryNavigation = {
+			role: "provider_checkpoint",
+			tokensBefore: snapshot.tokensBefore,
+		};
 		if (signal.aborted) throw new Error("Compaction cancelled");
 		snapshot.consumed = true;
 		let entryId: string | undefined;
 		try {
-			entryId = this.#sessionManager.appendCustomEntry(customType, proposal.data);
+			entryId = this.#sessionManager.appendCustomEntry(customType, proposal.data, navigation);
 			const savedEntry = this.#sessionManager.getEntry(entryId);
 			if (
 				savedEntry?.type !== "custom" ||
 				savedEntry.id !== entryId ||
 				savedEntry.parentId !== snapshot.leafId ||
 				savedEntry.customType !== customType ||
-				!isDeepStrictEqual(savedEntry.data, proposal.data)
+				!isDeepStrictEqual(savedEntry.data, proposal.data) ||
+				!isDeepStrictEqual(savedEntry.navigation, navigation)
 			) {
 				throw new Error("Provider checkpoint append could not be verified after append");
 			}

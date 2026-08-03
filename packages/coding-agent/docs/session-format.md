@@ -268,6 +268,12 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
+Provider checkpoints committed through Pi's verified checkpoint transaction also carry host-owned
+`navigation` metadata with `role: "provider_checkpoint"` and the trusted pre-compaction
+`tokensBefore` count. Pi shows these boundaries in the default session tree without interpreting the
+opaque checkpoint `data`. HTML exports preserve the navigation metadata but remove that opaque data.
+Missing or malformed navigation metadata is treated as an ordinary custom entry.
+
 ### CustomMessageEntry
 
 Extension-injected messages that DO participate in LLM context.

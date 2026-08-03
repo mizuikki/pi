@@ -1,8 +1,9 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.ts";
-import { getModel, stream, streamSimple } from "../src/compat.ts";
+import { getModel, getModels, stream, streamSimple } from "../src/compat.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
+import { createZaiTestModel } from "./zai-models.ts";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -73,6 +74,21 @@ const localOpenAICompletionsModel = {
 	contextWindow: 128000,
 	maxTokens: 8192,
 } satisfies Omit<Model<"openai-completions">, "id" | "name" | "compat">;
+
+// These fixtures intentionally avoid generated model IDs. Model data is
+// refreshed from models.dev during builds and may retire historical models.
+const zaiSupportedToolStreamModel = createZaiTestModel("glm-5.1", { zaiToolStream: true });
+const zaiUnsupportedToolStreamModel = createZaiTestModel("glm-4.5-air");
+const zaiGlm52Model = createZaiTestModel("glm-5.2", {
+	supportsReasoningEffort: true,
+	thinkingLevelMap: {
+		minimal: null,
+		low: "high",
+		medium: "high",
+		high: "high",
+		max: "max",
+	},
+});
 
 type CapturedParams = {
 	chat_template_kwargs?: Record<string, unknown>;
@@ -252,7 +268,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("enables tool_stream for supported z.ai models with tools", async () => {
-		const model = getModel("zai", "glm-5.1")!;
+		const model = zaiSupportedToolStreamModel;
 		const tools: Tool[] = [
 			{
 				name: "ping",
@@ -288,30 +304,26 @@ describe("openai-completions tool_choice", () => {
 		expect(params.tool_stream).toBe(true);
 	});
 
-	it("stores z.ai tool_stream support in model compat metadata", () => {
-		expect(getModel("zai", "glm-5.1")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.7")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.7")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-5-turbo")?.compat?.zaiToolStream).toBe(true);
-		expect(getModel("zai", "glm-4.5-air")?.compat?.zaiToolStream).toBeUndefined();
+	it("loads z.ai tool_stream support from generated model metadata", () => {
+		const zaiModels = getModels("zai");
+		expect(zaiModels.length).toBeGreaterThan(0);
+		expect(zaiModels.some((model) => model.compat?.zaiToolStream === true)).toBe(true);
+		expect(zaiUnsupportedToolStreamModel.compat?.zaiToolStream).toBeUndefined();
 	});
 
 	it("stores z.ai GLM-5.2 effort metadata", () => {
-		for (const provider of ["zai", "zai-coding-cn"] as const) {
-			const model = getModel(provider, "glm-5.2")!;
-			expect(model.compat?.supportsReasoningEffort).toBe(true);
-			expect(model.thinkingLevelMap).toEqual({
-				minimal: null,
-				low: "high",
-				medium: "high",
-				high: "high",
-				max: "max",
-			});
-		}
+		expect(zaiGlm52Model.compat?.supportsReasoningEffort).toBe(true);
+		expect(zaiGlm52Model.thinkingLevelMap).toEqual({
+			minimal: null,
+			low: "high",
+			medium: "high",
+			high: "high",
+			max: "max",
+		});
 	});
 
 	it("maps z.ai GLM-5.2 thinking levels to reasoning_effort", async () => {
-		const model = getModel("zai", "glm-5.2")!;
+		const model = zaiGlm52Model;
 		const cases = [
 			{ reasoning: "low", effort: "high" },
 			{ reasoning: "medium", effort: "high" },
@@ -349,7 +361,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("preserves z.ai thinking when replaying reasoning_content", async () => {
-		const model = getModel("zai", "glm-5.2")!;
+		const model = zaiGlm52Model;
 		const assistantMessage: AssistantMessage = {
 			role: "assistant",
 			api: "openai-completions",
@@ -409,7 +421,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits z.ai GLM-5.2 reasoning_effort when thinking is off", async () => {
-		const model = getModel("zai", "glm-5.2")!;
+		const model = zaiGlm52Model;
 		let payload: unknown;
 
 		await streamSimple(
@@ -437,7 +449,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits tool_stream for unsupported z.ai models", async () => {
-		const model = getModel("zai", "glm-4.5-air")!;
+		const model = zaiUnsupportedToolStreamModel;
 		const tools: Tool[] = [
 			{
 				name: "ping",
@@ -474,7 +486,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("respects explicit z.ai tool_stream compat override", async () => {
-		const baseModel = getModel("zai", "glm-4.5-air")!;
+		const baseModel = zaiUnsupportedToolStreamModel;
 		const model = {
 			...baseModel,
 			compat: {
@@ -518,7 +530,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("omits tool_stream when no tools are provided", async () => {
-		const model = getModel("zai", "glm-5.1")!;
+		const model = zaiSupportedToolStreamModel;
 		let payload: unknown;
 
 		await streamSimple(
@@ -560,7 +572,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 
-		const model = getModel("zai", "glm-5.1")!;
+		const model = zaiSupportedToolStreamModel;
 		const response = await streamSimple(
 			model,
 			{

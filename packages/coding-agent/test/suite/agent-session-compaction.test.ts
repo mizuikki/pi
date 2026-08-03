@@ -181,11 +181,13 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(result).toMatchObject({ kind: "provider_checkpoint", checkpointId: "fixture-checkpoint-1" });
 		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
-		expect(
-			harness.sessionManager
-				.getEntries()
-				.find((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint"),
-		).toMatchObject({ data: { kind: "fixture", version: 1 } });
+		const checkpointEntry = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "fixture.provider-checkpoint");
+		expect(checkpointEntry).toMatchObject({
+			data: { kind: "fixture", version: 1 },
+			navigation: { role: "provider_checkpoint", tokensBefore: expect.any(Number) },
+		});
 		expect(checkpointEvents).toHaveLength(1);
 		expect(checkpointEvents[0]).toMatchObject({
 			type: "session_provider_checkpoint",
@@ -195,9 +197,12 @@ describe("AgentSession compaction characterization", () => {
 			tokensBefore: expect.any(Number),
 			willRetry: false,
 		});
+		expect(checkpointEntry?.type === "custom" ? checkpointEntry.navigation?.tokensBefore : undefined).toBe(
+			(checkpointEvents[0] as { tokensBefore: number }).tokensBefore,
+		);
 	});
 
-	it("blocks manual success when provider checkpoint readback is indeterminate", async () => {
+	it("blocks manual success when provider checkpoint navigation readback is indeterminate", async () => {
 		const indeterminateEvents: unknown[] = [];
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
@@ -219,10 +224,12 @@ describe("AgentSession compaction characterization", () => {
 		});
 		harnesses.push(harness);
 		seedCompactableSession(harness);
-		const manager = harness.sessionManager as unknown as {
-			getEntry: (id: string) => unknown;
+		const originalGetEntry = harness.sessionManager.getEntry.bind(harness.sessionManager);
+		const manager = harness.sessionManager as unknown as { getEntry: (id: string) => unknown };
+		manager.getEntry = (id) => {
+			const entry = originalGetEntry(id);
+			return entry?.type === "custom" ? { ...entry, navigation: undefined } : entry;
 		};
-		manager.getEntry = () => undefined;
 
 		await expect(harness.session.compact()).rejects.toThrow(
 			"Provider checkpoint append could not be verified after append",
@@ -271,6 +278,9 @@ describe("AgentSession compaction characterization", () => {
 		await expect(internals._runAutoCompaction("overflow", true, retryMessage)).resolves.toBe(true);
 
 		expect(order).toEqual(["checkpoint:true", "end:true"]);
+		expect(harness.sessionManager.getEntries().find((entry) => entry.type === "custom")).toMatchObject({
+			navigation: { role: "provider_checkpoint", tokensBefore: expect.any(Number) },
+		});
 		expect(harness.session.agent.state.messages).not.toContain(retryMessage);
 	});
 

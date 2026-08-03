@@ -6,7 +6,7 @@ import { getResolvedThemeColors, getThemeExportColors } from "../../modes/intera
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
-import { SessionManager } from "../session-manager.ts";
+import { isProviderCheckpointEntry, SessionManager } from "../session-manager.ts";
 
 /**
  * Interface for rendering custom tools to HTML.
@@ -137,6 +137,15 @@ interface SessionData {
 	renderedTools?: Record<string, RenderedToolHtml>;
 }
 
+function sanitizeEntriesForExport(entries: SessionEntry[]): SessionEntry[] {
+	return entries.map((entry) => {
+		if (!isProviderCheckpointEntry(entry)) return entry;
+		const sanitizedEntry: SessionEntry = { ...entry };
+		delete sanitizedEntry.data;
+		return sanitizedEntry;
+	});
+}
+
 /**
  * Core HTML generation logic shared by both export functions.
  */
@@ -262,7 +271,7 @@ export async function exportSessionToHtml(
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries,
+		entries: sanitizeEntriesForExport(entries),
 		leafId: sm.getLeafId(),
 		systemPrompt: state?.systemPrompt,
 		tools: state?.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
@@ -297,7 +306,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries: sm.getEntries(),
+		entries: sanitizeEntriesForExport(sm.getEntries()),
 		leafId: sm.getLeafId(),
 		systemPrompt: undefined,
 		tools: undefined,

@@ -14,6 +14,7 @@ import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-u
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
+import { getZaiModel } from "./zai-models.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -919,33 +920,37 @@ describe("Generate E2E Tests", () => {
 		},
 	);
 
-	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-5.1 via OpenAI Completions)", () => {
-		const llm = getModel("zai", "glm-5.1");
+	const zaiModel = getZaiModel(["glm-5.1", "glm-5.2", "glm-5-turbo", "glm-4.7"]);
+	describe.skipIf(!process.env.ZAI_API_KEY || !zaiModel)(
+		"zAI Provider (available model via OpenAI Completions)",
+		() => {
+			const llm = zaiModel!;
 
-		it("should complete basic text generation", { retry: 3 }, async () => {
-			await basicTextGeneration(llm);
-		});
+			it("should complete basic text generation", { retry: 3 }, async () => {
+				await basicTextGeneration(llm);
+			});
 
-		it("should handle tool calling", { retry: 3 }, async () => {
-			await handleToolCall(llm);
-		});
+			it("should handle tool calling", { retry: 3 }, async () => {
+				await handleToolCall(llm);
+			});
 
-		it("should handle streaming", { retry: 3 }, async () => {
-			await handleStreaming(llm);
-		});
+			it("should handle streaming", { retry: 3 }, async () => {
+				await handleStreaming(llm);
+			});
 
-		it("should handle thinking mode", { retry: 3 }, async () => {
-			await handleThinking(llm, { reasoningEffort: "medium" });
-		});
+			it("should handle thinking mode", { retry: 3 }, async () => {
+				await handleThinking(llm, { reasoningEffort: "medium" });
+			});
 
-		it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-			await multiTurn(llm, { reasoningEffort: "medium" });
-		});
+			it("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
+				await multiTurn(llm, { reasoningEffort: "medium" });
+			});
 
-		it("should handle image input", { retry: 3 }, async () => {
-			await handleImage(llm);
-		});
-	});
+			it("should handle image input", { retry: 3 }, async () => {
+				await handleImage(llm);
+			});
+		},
+	);
 
 	describe.skipIf(!process.env.MISTRAL_API_KEY)("Mistral Provider (devstral-medium-latest)", () => {
 		const llm = getModel("mistral", "devstral-medium-latest");

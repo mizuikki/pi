@@ -251,6 +251,7 @@ export {
 	type SessionContext,
 	type SessionEntry,
 	type SessionEntryBase,
+	type SessionEntryNavigation,
 	type SessionHeader,
 	type SessionInfo,
 	type SessionInfoEntry,

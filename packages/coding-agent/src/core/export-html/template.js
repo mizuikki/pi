@@ -357,9 +357,21 @@
           case 'thinking_level_change':
             parts.push('thinking', entry.thinkingLevel);
             break;
+          case 'custom':
+            parts.push(isProviderCheckpointEntry(entry) ? 'provider checkpoint' : 'custom', entry.customType);
+            break;
         }
 
         return parts.join(' ').toLowerCase();
+      }
+
+      function isProviderCheckpointEntry(entry) {
+        const navigation = entry?.navigation;
+        return entry?.type === 'custom' &&
+          navigation?.role === 'provider_checkpoint' &&
+          typeof navigation.tokensBefore === 'number' &&
+          Number.isFinite(navigation.tokensBefore) &&
+          navigation.tokensBefore >= 0;
       }
 
       /**
@@ -373,11 +385,8 @@
           const label = flatNode.node.label;
           const isCurrentLeaf = entry.id === currentLeafId;
 
-          // Always show current leaf
-          if (isCurrentLeaf) return true;
-
           // Hide assistant messages with only tool calls (no text) unless error/aborted
-          if (entry.type === 'message' && entry.message.role === 'assistant') {
+          if (entry.type === 'message' && entry.message.role === 'assistant' && !isCurrentLeaf) {
             const msg = entry.message;
             const hasText = hasTextContent(msg.content);
             const isErrorOrAborted = msg.stopReason && msg.stopReason !== 'stop' && msg.stopReason !== 'toolUse';
@@ -385,7 +394,8 @@
           }
 
           // Apply filter mode
-          const isSettingsEntry = ['label', 'custom', 'model_change', 'thinking_level_change'].includes(entry.type);
+          const isSettingsEntry = ['label', 'model_change', 'thinking_level_change'].includes(entry.type) ||
+            (entry.type === 'custom' && !isProviderCheckpointEntry(entry));
           let passesFilter = true;
 
           switch (filterMode) {
@@ -692,6 +702,11 @@
             const content = typeof entry.content === 'string' ? entry.content : extractContent(entry.content);
             return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`;
           }
+          case 'custom':
+            if (isProviderCheckpointEntry(entry)) {
+              return labelHtml + `<span class="tree-compaction">[provider checkpoint: ${Math.round(entry.navigation.tokensBefore/1000)}k tokens]</span>`;
+            }
+            return labelHtml + `<span class="tree-muted">[custom: ${escapeHtml(entry.customType)}]</span>`;
           case 'model_change':
             return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
           case 'thinking_level_change':
