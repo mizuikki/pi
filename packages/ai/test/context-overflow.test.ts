@@ -20,6 +20,7 @@ import { isContextOverflow } from "../src/utils/overflow.ts";
 import { hasAzureOpenAICredentials } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import { resolveApiKey } from "./oauth.ts";
+import { getZaiModel } from "./zai-models.ts";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([resolveApiKey("github-copilot"), resolveApiKey("openai-codex")]);
@@ -353,9 +354,10 @@ describe("Context overflow error handling", () => {
 	// or may rate limit instead
 	// =============================================================================
 
-	describe.skipIf(!process.env.ZAI_API_KEY)("z.ai", () => {
-		it("glm-4.5-air - should detect overflow via isContextOverflow when z.ai reports it", async () => {
-			const model = getModel("zai", "glm-4.5-air");
+	const zaiModel = getZaiModel(["glm-4.5-air", "glm-4.7", "glm-5-turbo", "glm-5.2"]);
+	describe.skipIf(!process.env.ZAI_API_KEY || !zaiModel)("z.ai", () => {
+		it("available model - should detect overflow via isContextOverflow when z.ai reports it", async () => {
+			const model = zaiModel!;
 			const result = await testContextOverflow(model, process.env.ZAI_API_KEY!);
 			logResult(result);
 
