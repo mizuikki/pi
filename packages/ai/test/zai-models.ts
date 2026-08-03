@@ -23,7 +23,7 @@ export function getZaiModel(preferredIds: readonly string[] = []): Model<Api> | 
 		const model = models.find((candidate) => candidate.id === id);
 		if (model) return model;
 	}
-	return models[0];
+	return undefined;
 }
 
 export function createZaiTestModel(
