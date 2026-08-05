@@ -75,6 +75,26 @@ const localOpenAICompletionsModel = {
 	maxTokens: 8192,
 } satisfies Omit<Model<"openai-completions">, "id" | "name" | "compat">;
 
+const groqQwen3ReasoningModel = {
+	id: "qwen3-reasoning-fixture",
+	name: "Groq Qwen3 reasoning fixture",
+	api: "openai-completions",
+	provider: "groq",
+	baseUrl: "https://api.groq.com/openai/v1",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128000,
+	maxTokens: 8192,
+	thinkingLevelMap: {
+		minimal: "default",
+		low: "default",
+		medium: "default",
+		high: "default",
+		xhigh: "default",
+	},
+} satisfies Model<"openai-completions">;
+
 // These fixtures intentionally avoid generated model IDs. Model data is
 // refreshed from models.dev during builds and may retire historical models.
 const zaiSupportedToolStreamModel = createZaiTestModel("glm-5.1", { zaiToolStream: true });
@@ -212,7 +232,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("maps groq qwen3 reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3-32b")!;
+		const model = groqQwen3ReasoningModel;
 		let payload: unknown;
 
 		await streamSimple(
@@ -663,6 +683,55 @@ describe("openai-completions tool_choice", () => {
 
 		expect(response.stopReason).toBe("error");
 		expect(response.errorMessage).toBe("Stream ended without finish_reason");
+	});
+
+	it("ignores empty custom objects on function tool call deltas", async () => {
+		mockState.chunks = [
+			{
+				id: "chatcmpl-empty-custom",
+				choices: [
+					{
+						delta: {
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_1",
+									type: "function",
+									function: { name: "read", arguments: '{"path":"README.md"}' },
+									custom: {},
+								},
+							],
+						},
+						finish_reason: "tool_calls",
+					},
+				],
+			},
+		];
+
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		const tool: Tool = {
+			name: "read",
+			description: "Read a file",
+			parameters: Type.Object({ path: Type.String() }),
+		};
+		const response = await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Read README.md", timestamp: Date.now() }],
+				tools: [tool],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		expect(response.content).toEqual([
+			{
+				type: "toolCall",
+				id: "call_1",
+				name: "read",
+				arguments: { path: "README.md" },
+			},
+		]);
 	});
 
 	it("coalesces tool call deltas by stable index when provider mutates ids mid-stream", async () => {
@@ -1380,6 +1449,33 @@ describe("openai-completions tool_choice", () => {
 		for (const model of cases) {
 			let payload: unknown;
 			expect(model.compat?.maxTokensField).toBe("max_tokens");
+
+			await streamSimple(
+				model,
+				{
+					messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+				},
+				{
+					apiKey: "test",
+					maxTokens: 123,
+					onPayload: (params: unknown) => {
+						payload = params;
+					},
+				},
+			).result();
+
+			const params = (payload ?? mockState.lastParams) as { max_tokens?: number; max_completion_tokens?: number };
+			expect(params.max_tokens).toBe(123);
+			expect(params.max_completion_tokens).toBeUndefined();
+		}
+	});
+
+	it("sends max_tokens for Z.AI completions models", async () => {
+		const cases = [createZaiTestModel("glm-5.1"), createZaiTestModel("glm-5.2")] as const;
+
+		for (const model of cases) {
+			expect(model.compat?.maxTokensField).toBe("max_tokens");
+			let payload: unknown;
 
 			await streamSimple(
 				model,
