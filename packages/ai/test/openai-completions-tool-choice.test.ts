@@ -75,6 +75,26 @@ const localOpenAICompletionsModel = {
 	maxTokens: 8192,
 } satisfies Omit<Model<"openai-completions">, "id" | "name" | "compat">;
 
+const groqQwen3ReasoningModel = {
+	id: "qwen3-reasoning-fixture",
+	name: "Groq Qwen3 reasoning fixture",
+	api: "openai-completions",
+	provider: "groq",
+	baseUrl: "https://api.groq.com/openai/v1",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 128000,
+	maxTokens: 8192,
+	thinkingLevelMap: {
+		minimal: "default",
+		low: "default",
+		medium: "default",
+		high: "default",
+		xhigh: "default",
+	},
+} satisfies Model<"openai-completions">;
+
 // These fixtures intentionally avoid generated model IDs. Model data is
 // refreshed from models.dev during builds and may retire historical models.
 const zaiSupportedToolStreamModel = createZaiTestModel("glm-5.1", { zaiToolStream: true });
@@ -212,7 +232,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("maps groq qwen3 reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3-32b")!;
+		const model = groqQwen3ReasoningModel;
 		let payload: unknown;
 
 		await streamSimple(
