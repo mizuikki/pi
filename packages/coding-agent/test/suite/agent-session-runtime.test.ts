@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -14,6 +15,7 @@ import { AuthStorage } from "../../src/core/auth-storage.ts";
 import { ModelRuntime } from "../../src/core/model-runtime.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type {
+	AgentToolResult,
 	ExtensionAPI,
 	ExtensionFactory,
 	SessionBeforeForkEvent,
@@ -45,7 +47,7 @@ describe("AgentSessionRuntime characterization", () => {
 			options?.cwd ?? join(tmpdir(), `pi-runtime-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const faux = fauxProvider({
+		const faux = registerFauxProvider({
 			models: [
 				{ id: "faux-1", reasoning: true },
 				{ id: "faux-2", reasoning: false },
@@ -118,6 +120,7 @@ describe("AgentSessionRuntime characterization", () => {
 
 		cleanups.push(async () => {
 			await runtime.dispose();
+			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}
@@ -165,6 +168,55 @@ describe("AgentSessionRuntime characterization", () => {
 			throw new Error("missing persisted assistant message");
 		}
 		expect(persistedAssistant.usage.cost.total).toBe(0.123);
+	});
+
+	it("settles the active response before session replacement", async () => {
+		let toolStarted!: () => void;
+		const toolStartedPromise = new Promise<void>((resolve) => {
+			toolStarted = resolve;
+		});
+		const { runtime, faux } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.registerTool({
+				name: "block",
+				label: "Block",
+				description: "Blocks until aborted",
+				parameters: Type.Object({}),
+				execute: (_toolCallId, _params, signal) =>
+					new Promise<AgentToolResult<unknown>>((resolve) => {
+						toolStarted();
+						signal?.addEventListener("abort", () =>
+							resolve({ content: [{ type: "text", text: "tool aborted" }], details: {} }),
+						);
+					}),
+			});
+		});
+
+		await runtime.session.prompt("hello");
+		const firstSessionFile = runtime.session.sessionFile!;
+		await runtime.newSession();
+		await runtime.session.bindExtensions({});
+
+		faux.setResponses([fauxAssistantMessage(fauxToolCall("block", {}), { stopReason: "toolUse" })]);
+		const outgoingSession = runtime.session;
+		const promptPromise = outgoingSession.prompt("start blocking tool");
+		await toolStartedPromise;
+
+		const switchResult = await runtime.switchSession(firstSessionFile);
+		await promptPromise;
+
+		expect(switchResult.cancelled).toBe(false);
+		expect(runtime.session.sessionFile).toBe(firstSessionFile);
+		// The outgoing session settled before replacement: the interrupted tool
+		// call has a persisted tool result instead of dangling forever.
+		const outgoingEntries = SessionManager.open(outgoingSession.sessionFile!)
+			.getEntries()
+			.filter((entry) => entry.type === "message");
+		expect(outgoingEntries.map((entry) => entry.message.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"assistant",
+		]);
 	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
@@ -353,7 +405,7 @@ describe("AgentSessionRuntime characterization", () => {
 		const tempDir = join(tmpdir(), `pi-runtime-suite-in-memory-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 
-		const faux = fauxProvider({
+		const faux = registerFauxProvider({
 			models: [
 				{ id: "faux-1", reasoning: true },
 				{ id: "faux-2", reasoning: false },
@@ -422,6 +474,7 @@ describe("AgentSessionRuntime characterization", () => {
 		await runtime.session.bindExtensions({});
 		cleanups.push(async () => {
 			await runtime.dispose();
+			faux.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true, force: true });
 			}
